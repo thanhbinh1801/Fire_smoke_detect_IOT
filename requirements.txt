@@ -1,0 +1,12 @@
+# --- CÁC THƯ VIỆN AI & XỬ LÝ ẢNH (BẮT BUỘC CHO CẢ RASPBERRY PI VÀ LAPTOP) ---
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.23.0
+dill
+
+# --- LƯU Ý PHẦN CỨNG TRÊN RASPBERRY PI OS ---
+# Hai thư viện picamera2 và gpiozero được quản lý bởi hệ điều hành Pi OS,
+# cài đặt qua lệnh hệ thống (không cài qua pip để tránh xung đột driver):
+#   sudo apt install -y python3-picamera2 python3-gpiozero
+# Sau đó tạo venv bằng lệnh: python3 -m venv venv --system-site-packages
+
