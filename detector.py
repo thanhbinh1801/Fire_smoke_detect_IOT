@@ -92,16 +92,10 @@ class FireSmokeDetector:
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         preds = self._forward(rgb)
 
-        # Chỉ lấy cột điểm số của nhãn 'fire' (class 0), bỏ qua hoàn toàn khói (smoke)
-        fire_col = 4  # Class 0 là fire
-        confidences = preds[:, fire_col]
+        scores_matrix = preds[:, 4:]  # (num_anchors, num_classes)
+        class_ids = np.argmax(scores_matrix, axis=1)
+        confidences = np.max(scores_matrix, axis=1)
         max_score = float(np.max(confidences))
-
-        # Debug log định kỳ nếu phát hiện có tín hiệu lửa tiềm năng nhưng điểm chưa vượt ngưỡng
-        now = time.time()
-        if (0.15 <= max_score < self.conf_threshold) and (now - self._last_debug_time > 1.2):
-            self._last_debug_time = now
-            print(f"[AI Debug] Tin hieu LUA (fire) tiem nang: Conf = {max_score:.2f} (Nguong: {self.conf_threshold}).")
 
         # Lọc theo ngưỡng tin cậy
         mask = confidences >= self.conf_threshold
@@ -110,6 +104,7 @@ class FireSmokeDetector:
 
         filtered_preds = preds[mask]
         filtered_conf = confidences[mask]
+        filtered_cls = class_ids[mask]
 
         cx = filtered_preds[:, 0]
         cy = filtered_preds[:, 1]
@@ -126,6 +121,7 @@ class FireSmokeDetector:
 
         boxes_for_nms = np.column_stack([x1, y1, w_scaled, h_scaled]).astype(int).tolist()
         conf_list = filtered_conf.astype(float).tolist()
+        cls_list = filtered_cls.astype(int).tolist()
 
         indices = cv2.dnn.NMSBoxes(
             boxes_for_nms,
@@ -138,17 +134,21 @@ class FireSmokeDetector:
         if len(indices) > 0:
             for idx in np.array(indices).flatten():
                 bx, by, bw, bh = boxes_for_nms[idx]
+                cls_id = cls_list[idx]
+                label = self.names.get(cls_id, f"class_{cls_id}")
                 conf = conf_list[idx]
 
-                xmin = max(0, min(orig_w - 1, bx))
-                ymin = max(0, min(orig_h - 1, by))
-                xmax = max(0, min(orig_w - 1, bx + bw))
-                ymax = max(0, min(orig_h - 1, by + bh))
+                # Bỏ qua khói (smoke), CHỈ lấy LỬA (fire)
+                if "fire" in label.lower():
+                    xmin = max(0, min(orig_w - 1, bx))
+                    ymin = max(0, min(orig_h - 1, by))
+                    xmax = max(0, min(orig_w - 1, bx + bw))
+                    ymax = max(0, min(orig_h - 1, by + bh))
 
-                detections.append({
-                    "label": "fire",
-                    "conf": float(conf),
-                    "box": (int(xmin), int(ymin), int(xmax), int(ymax))
-                })
+                    detections.append({
+                        "label": "fire",
+                        "conf": float(conf),
+                        "box": (int(xmin), int(ymin), int(xmax), int(ymax))
+                    })
 
         return detections
