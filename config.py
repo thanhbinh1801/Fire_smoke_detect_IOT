@@ -24,6 +24,19 @@ PLATFORM = "pi"
 # Webcam index khi chạy test trên laptop (0 = webcam mặc định)
 WEBCAM_INDEX = 0
 
+# --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
+# Tự động lấy nét liên tục (Continuous Autofocus cho Arducam IMX519)
+CAMERA_AUTOFOCUS = True
+
+# Sửa lỗi đảo màu của Picamera2 (chuyển RGB sang BGR để lửa có màu đỏ chuẩn, không bị ám xanh)
+CAMERA_SWAP_RB = True
+
+# Tốc độ khung hình mong muốn cho camera (30 FPS)
+CAMERA_FPS = 30
+
+# Chạy AI song song (Asynchronous) giúp màn hình camera mượt 25 - 30 FPS không bị giật lag
+ASYNC_DETECTION = True
+
 # --- CẤU HÌNH ĐÈN CẢNH BÁO LỬA (LED) ---
 # Chân BCM GPIO nối đèn LED cảnh báo lửa (BCM 27 = Physical Pin 13)
 # Đèn chỉ sáng khi nhận diện được lửa trong khung hình, hết lửa tắt ngay lập tức
@@ -51,6 +64,6 @@ SAVE_SNAPSHOT = False
 SNAPSHOT_DIR = "data/snapshots"
 
 # --- HIỂN THỊ MÀN HÌNH ---
-# Hiện cửa sổ video (cv2.imshow). Nếu Pi chạy headless (SSH không cắm màn hình), đặt False
-SHOW_DISPLAY = False
+# Hiện cửa sổ video (cv2.imshow). Đặt True để hiện màn hình camera, đặt False nếu chạy headless (không màn hình)
+SHOW_DISPLAY = True
 WINDOW_NAME = "Fire & Smoke Detector - IoT System"
