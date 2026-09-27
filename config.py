@@ -28,8 +28,9 @@ WEBCAM_INDEX = 0
 # Tự động lấy nét liên tục (Continuous Autofocus cho Arducam IMX519)
 CAMERA_AUTOFOCUS = True
 
-# Sửa lỗi đảo màu của Picamera2 (chuyển RGB sang BGR để lửa có màu đỏ chuẩn, không bị ám xanh)
-CAMERA_SWAP_RB = True
+# Sửa lỗi đảo màu của Picamera2 (False: giữ nguyên RGB888 của Picamera2, True: đảo kênh R-B)
+# Trong lúc chạy, bạn có thể nhấn phím 'c' trên cửa sổ camera để đảo màu qua lại tức thì
+CAMERA_SWAP_RB = False
 
 # Tốc độ khung hình mong muốn cho camera (30 FPS)
 CAMERA_FPS = 30

@@ -3,8 +3,8 @@
 Module thu thập hình ảnh camera:
 - "pi": Dùng Picamera2 (chuẩn chính thức cho Raspberry Pi OS Bookworm & Arducam IMX519)
   + Tối ưu cấu hình Video Stream 30 FPS.
-  + Hỗ trợ Continuous Autofocus cho thấu kính IMX519.
-  + Chuyển đổi hệ màu chuẩn BGR giúp ngọn lửa hiển thị màu đỏ cam tự nhiên.
+  + Hỗ trợ Autofocus và Manual Focus cho thấu kính IMX519.
+  + Hỗ trợ phím 'c' để đảo màu trực tiếp nếu bị ngược màu Đỏ - Xanh lam.
   + Threaded Camera đọc khung hình mượt mà không bị nghẽn buffer.
 - "laptop": Dùng OpenCV VideoCapture với webcam để test.
 """
@@ -20,6 +20,8 @@ class FireCamera:
         self.running = True
         self.frame = None
         self.lock = threading.Lock()
+        self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
+        self.lens_position = 2.0  # Tiêu cự ban đầu cho cự ly 0.5m
 
         if self.platform == "pi":
             try:
@@ -32,7 +34,6 @@ class FireCamera:
                 )
 
             self.picam2 = Picamera2()
-            # Dùng video configuration để tối ưu hóa FPS cao và độ trễ thấp
             target_fps = getattr(config, "CAMERA_FPS", 30)
             camera_config = self.picam2.create_video_configuration(
                 main={
@@ -45,14 +46,14 @@ class FireCamera:
             )
             self.picam2.configure(camera_config)
 
-            # Cấu hình tự động lấy nét (Autofocus) cho Arducam IMX519
+            # Cấu hình tự động lấy nét cho Arducam IMX519
             if getattr(config, "CAMERA_AUTOFOCUS", True):
                 try:
-                    # 2 tương đương với Continuous Autofocus trong libcamera
+                    # AfMode 2: Continuous AF (Tự động lấy nét liên tục)
                     self.picam2.set_controls({"AfMode": 2})
-                    print("[Camera] Da kich hoat Continuous Autofocus cho Arducam IMX519.")
+                    print("[Camera] Da bat Continuous Autofocus cho Arducam IMX519.")
                 except Exception as e:
-                    print(f"[Camera] Canh bao cau hinh Autofocus: {e}")
+                    print(f"[Camera] Canh bao cau hinh AF: {e}")
 
             self.picam2.start()
             print(f"[Camera] Da khoi dong Picamera2 ({config.FRAME_WIDTH}x{config.FRAME_HEIGHT} @ {target_fps}fps)")
@@ -79,16 +80,42 @@ class FireCamera:
         while self.frame is None and (time.time() - start_wait < 5.0):
             time.sleep(0.05)
 
+    def toggle_color_swap(self):
+        """Đảo kênh màu qua lại trực tiếp khi đang chạy"""
+        self.swap_rb = not self.swap_rb
+        mode = "DAO KENH R-B" if self.swap_rb else "GIU NGUYEN (RAW)"
+        print(f"\n[Camera] >>> DA CHUYEN CHE DO MAU: {mode} <<<")
+        return self.swap_rb
+
+    def trigger_autofocus(self):
+        """Kích hoạt chu kỳ lấy nét tự động lại cho Arducam IMX519"""
+        if self.platform == "pi" and hasattr(self, "picam2"):
+            try:
+                self.picam2.set_controls({"AfMode": 1, "AfTrigger": 0})
+                time.sleep(0.05)
+                self.picam2.set_controls({"AfMode": 2, "AfTrigger": 1})
+                print("\n[Camera] >>> DA KICH HOAT LAY NET TU DONG (AUTOFOCUS) <<<")
+            except Exception as e:
+                print(f"[Camera] Loi Autofocus: {e}")
+
+    def adjust_focus(self, step):
+        """Chỉnh tiêu cự thủ công (step: +0.5 hoặc -0.5)"""
+        if self.platform == "pi" and hasattr(self, "picam2"):
+            try:
+                self.lens_position = max(0.0, min(10.0, self.lens_position + step))
+                # Chuyển AfMode sang Manual (0) và set LensPosition
+                self.picam2.set_controls({"AfMode": 0, "LensPosition": float(self.lens_position)})
+                print(f"\n[Camera] >>> CHINH TIEU CU THU CONG: {self.lens_position:.1f} dioptres <<<")
+            except Exception as e:
+                print(f"[Camera] Loi Focus: {e}")
+
     def _capture_worker(self):
         """Luồng đọc liên tục khung hình từ camera ở background"""
-        swap_rb = getattr(config, "CAMERA_SWAP_RB", True)
-
         while self.running:
             try:
                 if self.platform == "pi":
                     raw = self.picam2.capture_array()
-                    # Picamera2 trả về mảng RGB. Chuyển RGB sang BGR để hiển thị màu đỏ chuẩn trên OpenCV
-                    if swap_rb:
+                    if self.swap_rb:
                         current_frame = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
                     else:
                         current_frame = raw
@@ -106,12 +133,11 @@ class FireCamera:
                 time.sleep(0.01)
 
     def get_frame(self):
-        """Trả về 1 frame dạng numpy array (BGR chuẩn cho OpenCV)."""
+        """Trả về 1 frame dạng numpy array."""
         with self.lock:
             if self.frame is not None:
                 return self.frame.copy()
 
-        # Nếu chưa có frame thì đợi nhẹ
         time.sleep(0.02)
         with self.lock:
             return self.frame.copy() if self.frame is not None else None

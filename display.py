@@ -4,12 +4,16 @@ Module hiển thị hình ảnh trực tiếp lên màn hình (qua OpenCV GUI).
 - Vẽ bounding box, nhãn và confidence.
 - Đổi màu viền toàn màn hình khi có báo động (Đỏ: Cháy/Khói, Xanh: An toàn).
 - Hiển thị FPS thời gian thực.
+- Hỗ trợ phím nóng:
+  + 'c': Đảo màu trực tiếp (RGB <-> BGR)
+  + 'f': Kích hoạt lấy nét tự động (Autofocus cho IMX519)
+  + 'q' hoặc ESC: Thoát
 """
 
 import cv2
 import config
 
-def draw_overlay(frame, detections, fps=None):
+def draw_overlay(frame, detections, fps=None, color_mode="RAW"):
     """
     Vẽ thông tin nhận diện và trạng thái lên frame.
     Trả về frame đã vẽ.
@@ -60,23 +64,46 @@ def draw_overlay(frame, detections, fps=None):
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 230, 0), 2, cv2.LINE_AA
         )
 
-    # Hiển thị FPS góc dưới bên trái
-    if fps is not None:
-        cv2.putText(
-            frame, f"FPS: {fps:.1f}", (15, h - 15),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2, cv2.LINE_AA
-        )
+    # Thanh trạng thái dưới cùng (FPS + Hướng dẫn phím)
+    cv2.rectangle(frame, (0, h - 30), (w, h), (20, 20, 20), -1)
+    fps_str = f"FPS: {fps:.1f}" if fps is not None else "FPS: --"
+    cv2.putText(
+        frame, fps_str, (15, h - 9),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA
+    )
+
+    help_str = "[c]: Doi mau | [f]: Lay net | [q]: Thoat"
+    cv2.putText(
+        frame, help_str, (w - 330, h - 9),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA
+    )
 
     return frame
 
 def show(frame):
     """
     Hiện frame lên cửa sổ.
-    Trả về False nếu người dùng nhấn phím 'q' hoặc 'ESC' để thoát.
+    Trả về hành động phím:
+    - 'quit': nếu nhấn 'q' hoặc ESC
+    - 'color': nếu nhấn 'c' để đổi màu
+    - 'focus': nếu nhấn 'f' để lấy nét
+    - 'focus_near': nếu nhấn ']' để nét gần
+    - 'focus_far': nếu nhấn '[' để nét xa
+    - None: không có phím đặc biệt
     """
     cv2.imshow(config.WINDOW_NAME, frame)
     key = cv2.waitKey(1) & 0xFF
-    return key not in (ord('q'), 27)
+    if key in (ord('q'), 27):
+        return 'quit'
+    elif key == ord('c'):
+        return 'color'
+    elif key == ord('f'):
+        return 'focus'
+    elif key in (ord(']'), ord('='), ord('+')):
+        return 'focus_near'
+    elif key in (ord('['), ord('-')):
+        return 'focus_far'
+    return None
 
 def close():
     """Đóng tất cả cửa sổ OpenCV"""

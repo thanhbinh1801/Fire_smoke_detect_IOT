@@ -122,10 +122,18 @@ def main():
                 # Hiển thị lên màn hình
                 if config.SHOW_DISPLAY:
                     display_frame = display.draw_overlay(frame.copy(), detections_to_draw, fps=current_fps)
-                    keep_running = display.show(display_frame)
-                    if not keep_running:
+                    action = display.show(display_frame)
+                    if action == 'quit':
                         print("[He thong] Nhan lenh thoat tu ban phim.")
                         break
+                    elif action == 'color':
+                        camera.toggle_color_swap()
+                    elif action == 'focus':
+                        camera.trigger_autofocus()
+                    elif action == 'focus_near':
+                        camera.adjust_focus(+0.5)
+                    elif action == 'focus_far':
+                        camera.adjust_focus(-0.5)
                 else:
                     time.sleep(0.02)
 
@@ -179,10 +187,18 @@ def main():
 
                 if config.SHOW_DISPLAY:
                     display_frame = display.draw_overlay(frame.copy(), detections, fps=current_fps)
-                    keep_running = display.show(display_frame)
-                    if not keep_running:
+                    action = display.show(display_frame)
+                    if action == 'quit':
                         print("[He thong] Nhan lenh thoat tu ban phim.")
                         break
+                    elif action == 'color':
+                        camera.toggle_color_swap()
+                    elif action == 'focus':
+                        camera.trigger_autofocus()
+                    elif action == 'focus_near':
+                        camera.adjust_focus(+0.5)
+                    elif action == 'focus_far':
+                        camera.adjust_focus(-0.5)
                 else:
                     time.sleep(0.01)
 
