@@ -4,24 +4,30 @@ Cấu hình hệ thống nhận diện khói & lửa
 Hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực tế).
 """
 
-# Đường dẫn tới model weights
-MODEL_PATH = "models/fire_smoke_yolov8n.pt"
+# Đường dẫn tới model weights (ONNX tối ưu cho Raspberry Pi)
+MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
 CONFIDENCE_THRESHOLD = 0.5
+IOU_THRESHOLD = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 # Nền tảng đang chạy: 
-# "laptop" (webcam qua OpenCV, buzzer giả lập qua console)
-# "pi" (camera CSI qua Picamera2, passive buzzer thật qua PWM GPIO)
+# "laptop" (webcam qua OpenCV, buzzer & led giả lập qua console)
+# "pi" (camera CSI qua Picamera2, passive buzzer & đèn LED thật qua GPIO)
 # PLATFORM = "laptop"
 PLATFORM = "pi"
 
 # Webcam index khi chạy test trên laptop (0 = webcam mặc định)
 WEBCAM_INDEX = 0
+
+# --- CẤU HÌNH ĐÈN CẢNH BÁO LỬA (LED) ---
+# Chân BCM GPIO nối đèn LED cảnh báo lửa (BCM 27 = Physical Pin 13)
+# Đèn chỉ sáng khi nhận diện được lửa trong khung hình, hết lửa tắt ngay lập tức
+LED_PIN = 27
 
 # --- CẤU HÌNH CÒI BUZZER ---
 # Chân BCM GPIO nối còi buzzer trên Pi (BCM 17 = Physical Pin 11)

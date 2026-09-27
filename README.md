@@ -13,14 +13,17 @@ Dự án giám sát và cảnh báo khói lửa thông minh theo thời gian th�
   - Trong dự án này, tác giả sử dụng camera **Arducam IMX519** (kết nối cổng CSI).
   - *Lưu ý:* Nếu bạn sử dụng loại camera khác (như Raspberry Pi Camera Module v2/v3 chính hãng, camera USB, v.v.), bạn chỉ cần cài driver/cấu hình phù hợp với loại camera đó sao cho hệ thống (`libcamera` / `Picamera2`) nhận diện được là có thể sử dụng code bình thường.
 - **Còi báo:** Passive Buzzer (cần xung PWM).
+- **Đèn báo:** Đèn LED cảnh báo cháy (kết nối qua điện trở 220Ω - 330Ω vào chân GPIO).
 
-### Sơ đồ nối chân GPIO cho Passive Buzzer:
+### Sơ đồ nối chân GPIO:
 
-| Chân Buzzer | Tên chân Raspberry Pi | Vị trí Pin vật lý | Ghi chú |
-| :--- | :--- | :--- | :--- |
-| **I/O / Signal (+)** | **GPIO 17 (BCM)** | **Pin 11** | Chân cấp xung PWM 2000Hz |
-| **GND (-)** | **Ground (GND)** | **Pin 6** (hoặc Pin 9, 14) | Nối đất |
-| **VCC** *(nếu module 3 chân)* | **3.3V / 5V** | **Pin 1 hoặc Pin 2** | Nguồn nuôi mạch |
+| Thiết bị | Chân thiết bị | Tên chân Raspberry Pi | Vị trí Pin vật lý | Ghi chú |
+| :--- | :--- | :--- | :--- | :--- |
+| **Đèn LED Báo Cháy** | **Cực dương Anode (+)** | **GPIO 27 (BCM)** | **Pin 13** | Sáng khi nhận diện có Lửa |
+| | **Cực âm Cathode (-)** | **Ground (GND)** | **Pin 14** (hoặc Pin 6, 9) | Nối tiếp qua điện trở 220Ω-330Ω |
+| **Passive Buzzer** | **I/O / Signal (+)** | **GPIO 17 (BCM)** | **Pin 11** | Chân cấp xung PWM 2000Hz |
+| | **GND (-)** | **Ground (GND)** | **Pin 6** (hoặc Pin 9, 14) | Nối đất |
+| | **VCC** *(module 3 chân)* | **3.3V / 5V** | **Pin 1 hoặc Pin 2** | Nguồn nuôi mạch |
 
 ---
 
@@ -62,20 +65,20 @@ Di chuyển vào thư mục dự án trên Pi (ví dụ bạn lưu tại `~/nhan
 cd ~/nhan_dien_chay
 ```
 
-Kiểm tra đảm bảo file model weights đã có trong thư mục `models/`:
+Kiểm tra đảm bảo file model ONNX đã có trong thư mục `models/`:
 ```bash
-ls -lh models/fire_smoke_yolov8n.pt
-# File này có dung lượng khoảng ~6.3 MB
+ls -lh models/fire_smoke_yolov8n.onnx
+# File ONNX này chạy trực tiếp bằng onnxruntime, không cần cài PyTorch hay Ultralytics
 ```
 
 ---
 
 ### Bước 2.3: Cài đặt thư viện hệ thống & Môi trường Python
 
-Chỉ cần copy và chạy nguyên khối lệnh sau (tự động cài đặt đầy đủ từ `picamera2`, `gpiozero` hệ thống đến các gói AI):
+Hệ thống đã được chuyển sang **ONNX Runtime**, giúp cài đặt cực kỳ nhanh, nhẹ và không tốn hàng GB thẻ nhớ như PyTorch/Ultralytics:
 
 ```bash
-# 1. Cài đặt thư viện phần cứng hệ thống (BẮT BUỘC để dùng camera CSI và còi GPIO)
+# 1. Cài đặt thư viện phần cứng hệ thống (BẮT BUỘC để dùng camera CSI và GPIO)
 sudo apt update
 sudo apt install -y python3-picamera2 python3-gpiozero python3-pip python3-venv libgl1 libglib2.0-0
 
@@ -85,7 +88,7 @@ python3 -m venv venv --system-site-packages
 # 3. Kích hoạt venv
 source venv/bin/activate
 
-# 4. Cài đặt các thư viện AI & YOLO từ requirements.txt
+# 4. Cài đặt các thư viện AI nhẹ (onnxruntime, opencv, numpy) từ requirements.txt
 pip install -r requirements.txt --default-timeout=1000
 ```
 
@@ -121,7 +124,8 @@ python main.py
 
 - **Khi an toàn:** Hệ thống liên tục quét qua camera Arducam.
 - **Khi phát hiện khói hoặc lửa:**
-  - Còi Passive Buzzer kêu cảnh báo ngắt quãng (bíp bíp bíp) trên chân GPIO 17 trong 2 giây.
+  - **Đèn LED (GPIO 27):** Chỉ bật sáng đúng lúc camera nhận diện được **Lửa** (`fire`). Khi khung hình không còn nhận diện thấy lửa, đèn lập tức tắt ngay.
+  - **Còi Passive Buzzer (GPIO 17):** Kêu cảnh báo ngắt quãng (bíp bíp bíp) trong 2 giây.
   - Luồng cảnh báo chạy ngầm (non-blocking) nên hình ảnh camera và nhận diện vẫn mượt mà không bị khựng.
   - Console in chi tiết nhãn và độ tin cậy: `[CANH BAO] Phat hien: ['fire'] | Confidence: [0.82]`.
 - **Dừng chương trình:** Nhấn `Ctrl + C` (hoặc phím `q` nếu có bật màn hình hiển thị).

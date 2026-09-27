@@ -55,7 +55,13 @@ def main():
             # Chạy AI nhận diện
             detections = detector.detect(frame)
 
-            # Xử lý khi có phát hiện
+            # Kiểm tra frame hiện tại có nhận diện được lửa không
+            has_fire = any(d["label"].lower() == "fire" for d in detections) if detections else False
+
+            # Đèn CHỈ SÁNG khi nhận diện được lửa (có lửa -> Bật ngay, không có lửa -> Tắt ngay)
+            alert.set_fire_led(has_fire)
+
+            # Xử lý khi có phát hiện (lửa hoặc khói)
             if detections:
                 labels = [d["label"] for d in detections]
                 confs = [round(d["conf"], 2) for d in detections]
