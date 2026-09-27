@@ -8,7 +8,8 @@ Hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
-CONFIDENCE_THRESHOLD = 0.5
+# Đặt 0.3 giúp phát hiện nhạy hơn khi quay qua màn hình điện thoại hoặc điều kiện ánh sáng yếu
+CONFIDENCE_THRESHOLD = 0.3
 IOU_THRESHOLD = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
