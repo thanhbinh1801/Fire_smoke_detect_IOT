@@ -77,9 +77,8 @@ def main():
                 alert.set_fire_led(has_fire)
 
                 if results:
-                    labels = [d["label"] for d in results]
                     confs = [round(d["conf"], 2) for d in results]
-                    print(f"[CANH BAO] Phat hien: {labels} | Confidence: {confs}")
+                    print(f"[CANH BAO] PHAT HIEN LUA! Confidence: {confs}")
                     alert.trigger()
 
                     if config.SAVE_SNAPSHOT:
@@ -164,9 +163,8 @@ def main():
                 alert.set_fire_led(has_fire)
 
                 if detections:
-                    labels = [d["label"] for d in detections]
                     confs = [round(d["conf"], 2) for d in detections]
-                    print(f"[CANH BAO] Phat hien: {labels} | Confidence: {confs}")
+                    print(f"[CANH BAO] PHAT HIEN LUA! Confidence: {confs}")
                     alert.trigger()
 
                     if config.SAVE_SNAPSHOT:

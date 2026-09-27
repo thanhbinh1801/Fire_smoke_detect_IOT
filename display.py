@@ -27,7 +27,7 @@ def draw_overlay(frame, detections, fps=None, color_mode="RAW"):
         # 2. Thanh banner cảnh báo ở trên cùng
         cv2.rectangle(frame, (0, 0), (w, 50), (0, 0, 200), -1)
         cv2.putText(
-            frame, "!!! CANH BAO CHAY / KHOI !!!", (20, 35),
+            frame, "!!! CANH BAO: PHAT HIEN LUA !!!", (20, 35),
             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA
         )
 

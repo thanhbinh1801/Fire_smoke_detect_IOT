@@ -92,17 +92,16 @@ class FireSmokeDetector:
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         preds = self._forward(rgb)
 
-        scores_matrix = preds[:, 4:]
-        confidences = np.max(scores_matrix, axis=1)
+        # Chỉ lấy cột điểm số của nhãn 'fire' (class 0), bỏ qua hoàn toàn khói (smoke)
+        fire_col = 4  # Class 0 là fire
+        confidences = preds[:, fire_col]
         max_score = float(np.max(confidences))
 
-        # Debug log định kỳ nếu phát hiện có tín hiệu lửa/khói nhưng điểm chưa vượt ngưỡng
+        # Debug log định kỳ nếu phát hiện có tín hiệu lửa tiềm năng nhưng điểm chưa vượt ngưỡng
         now = time.time()
         if (0.15 <= max_score < self.conf_threshold) and (now - self._last_debug_time > 1.2):
             self._last_debug_time = now
-            cls_id = int(np.argmax(preds[:, 4:], axis=1)[np.argmax(confidences)])
-            label = self.names.get(cls_id, f"class_{cls_id}")
-            print(f"[AI Debug] Tin hieu {label} tiem nang: Conf = {max_score:.2f} (Nguong: {self.conf_threshold}). Hay lay net ro hon hoac giu khoang cach 40-50cm.")
+            print(f"[AI Debug] Tin hieu LUA (fire) tiem nang: Conf = {max_score:.2f} (Nguong: {self.conf_threshold}).")
 
         # Lọc theo ngưỡng tin cậy
         mask = confidences >= self.conf_threshold
@@ -111,7 +110,6 @@ class FireSmokeDetector:
 
         filtered_preds = preds[mask]
         filtered_conf = confidences[mask]
-        filtered_cls = np.argmax(filtered_preds[:, 4:], axis=1)
 
         cx = filtered_preds[:, 0]
         cy = filtered_preds[:, 1]
@@ -128,7 +126,6 @@ class FireSmokeDetector:
 
         boxes_for_nms = np.column_stack([x1, y1, w_scaled, h_scaled]).astype(int).tolist()
         conf_list = filtered_conf.astype(float).tolist()
-        cls_list = filtered_cls.astype(int).tolist()
 
         indices = cv2.dnn.NMSBoxes(
             boxes_for_nms,
@@ -141,8 +138,6 @@ class FireSmokeDetector:
         if len(indices) > 0:
             for idx in np.array(indices).flatten():
                 bx, by, bw, bh = boxes_for_nms[idx]
-                cls_id = cls_list[idx]
-                label = self.names.get(cls_id, f"class_{cls_id}")
                 conf = conf_list[idx]
 
                 xmin = max(0, min(orig_w - 1, bx))
@@ -151,7 +146,7 @@ class FireSmokeDetector:
                 ymax = max(0, min(orig_h - 1, by + bh))
 
                 detections.append({
-                    "label": label,
+                    "label": "fire",
                     "conf": float(conf),
                     "box": (int(xmin), int(ymin), int(xmax), int(ymax))
                 })
