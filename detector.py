@@ -77,13 +77,8 @@ class FireSmokeDetector:
         else:
             resized = frame
 
-        # 2. Chuẩn hóa kênh màu đưa vào mạng AI:
-        # Nếu chạy trên Pi (Picamera2 xuất RGB888), giữ nguyên RGB chuẩn!
-        # Nếu chạy trên laptop (Webcam OpenCV xuất BGR), chuyển sang RGB.
-        if getattr(config, "PLATFORM", "pi") == "pi":
-            rgb_tensor = resized
-        else:
-            rgb_tensor = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        # 2. Chuẩn hóa kênh màu: Chuyển BGR sang RGB cho mạng nơ-ron YOLOv8
+        rgb_tensor = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
         tensor = rgb_tensor.transpose((2, 0, 1)).astype(np.float32) / 255.0
         blob = np.expand_dims(tensor, axis=0)

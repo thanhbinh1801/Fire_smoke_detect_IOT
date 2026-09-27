@@ -127,6 +127,8 @@ def main():
                 if action == 'quit':
                     print("[He thong] Nhan lenh thoat tu ban phim.")
                     break
+                elif action == 'color':
+                    camera.toggle_color_swap()
                 elif action == 'focus':
                     camera.trigger_autofocus()
                 elif action == 'focus_near':

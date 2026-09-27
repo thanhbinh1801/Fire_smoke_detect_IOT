@@ -35,6 +35,9 @@ CAMERA_LENS_POSITION = 2.0
 # Bù trừ phơi sáng (Exposure Value) cho IMX519 (-0.5 giúp giảm chói lóa từ ngọn lửa/màn hình điện thoại)
 CAMERA_EXPOSURE_COMP = -0.5
 
+# Đảo kênh màu R-B (False = giữ nguyên khung hình gốc hiển thị đỏ chuẩn, True = đảo R-B). Có thể bấm 'c' khi đang chạy.
+CAMERA_SWAP_RB = False
+
 # Tốc độ khung hình mong muốn cho camera (30 FPS)
 CAMERA_FPS = 30
 

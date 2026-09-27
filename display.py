@@ -20,11 +20,8 @@ def draw_overlay(frame, detections, fps=None):
     """
     h, w = frame.shape[:2]
 
-    # Nếu chạy trên Pi (ảnh gốc là RGB), chuyển sang BGR để OpenCV imshow hiển thị đúng màu đỏ
-    if getattr(config, "PLATFORM", "pi") == "pi":
-        render_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    else:
-        render_frame = frame.copy()
+    # Frame từ camera đã ở dạng BGR chuẩn hiển thị cho OpenCV imshow
+    render_frame = frame.copy()
 
     if detections:
         # 1. Viền đỏ cảnh báo toàn khung hình để nhận diện từ xa
@@ -76,10 +73,10 @@ def draw_overlay(frame, detections, fps=None):
         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA
     )
 
-    help_str = "[f]: AF | [ / ]: Tieu cu | [q]: Thoat"
+    help_str = "[c]: Mau | [f]: AF | [ / ]: Tieu cu | [q]: Thoat"
     cv2.putText(
-        render_frame, help_str, (w - 300, h - 9),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA
+        render_frame, help_str, (w - 380, h - 9),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1, cv2.LINE_AA
     )
 
     return render_frame
@@ -89,6 +86,7 @@ def show(frame):
     Hiện frame lên cửa sổ.
     Trả về hành động phím:
     - 'quit': nếu nhấn 'q' hoặc ESC
+    - 'color': nếu nhấn 'c' để đảo màu trực tiếp
     - 'focus': nếu nhấn 'f' để lấy nét lại
     - 'focus_near': nếu nhấn ']' hoặc '+' để tăng tiêu cự
     - 'focus_far': nếu nhấn '[' hoặc '-' để giảm tiêu cự
@@ -98,6 +96,8 @@ def show(frame):
     key = cv2.waitKey(1) & 0xFF
     if key in (ord('q'), 27):
         return 'quit'
+    elif key == ord('c'):
+        return 'color'
     elif key == ord('f'):
         return 'focus'
     elif key in (ord(']'), ord('='), ord('+')):

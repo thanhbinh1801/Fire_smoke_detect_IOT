@@ -21,6 +21,7 @@ class FireCamera:
         self.frame = None
         self.lock = threading.Lock()
         self.lens_position = getattr(config, "CAMERA_LENS_POSITION", 2.0)
+        self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
 
         if self.platform == "pi":
             try:
@@ -105,18 +106,28 @@ class FireCamera:
             except Exception as e:
                 print(f"[Camera] Loi Focus: {e}")
 
+    def toggle_color_swap(self):
+        """Đảo kênh màu R-B trực tiếp khi đang chạy (hỗ trợ phím nóng 'c')"""
+        self.swap_rb = not self.swap_rb
+        mode = "DAO KENH R-B" if self.swap_rb else "MAC DINH"
+        print(f"\n[Camera] >>> DA CHUYEN CHE DO MAU: {mode} <<<")
+        return self.swap_rb
+
     def _capture_worker(self):
         """Luồng đọc liên tục khung hình từ camera ở background"""
         while self.running:
             try:
                 if self.platform == "pi":
-                    # Trả về mảng RGB888 nguyên bản từ Picamera2
-                    current_frame = self.picam2.capture_array()
+                    raw = self.picam2.capture_array()
                 else:
                     ok, raw = self.cap.read()
                     if not ok:
                         time.sleep(0.01)
                         continue
+
+                if self.swap_rb:
+                    current_frame = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+                else:
                     current_frame = raw
 
                 with self.lock:
