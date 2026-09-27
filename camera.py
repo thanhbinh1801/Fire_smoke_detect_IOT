@@ -2,10 +2,10 @@
 """
 Module thu thập hình ảnh camera:
 - "pi": Dùng Picamera2 (chuẩn chính thức cho Raspberry Pi OS Bookworm & Arducam IMX519)
-  + Tối ưu cấu hình Video Stream 30 FPS.
-  + Hỗ trợ Autofocus và Manual Focus cho thấu kính IMX519.
-  + Hỗ trợ phím 'c' để đảo màu trực tiếp nếu bị ngược màu Đỏ - Xanh lam.
-  + Threaded Camera đọc khung hình mượt mà không bị nghẽn buffer.
+  + Khóa nét cố định (Manual Focus Lock) chống hiện tượng săn nét làm mờ vân lửa.
+  + Điều chỉnh phơi sáng giảm chói lóa từ màn hình điện thoại / ngọn lửa.
+  + Xuất mảng RGB888 chuẩn xác trực tiếp cho mạng nơ-ron AI.
+  + Hỗ trợ phím nóng '[' và ']' để vi chỉnh tiêu cự thấu kính.
 - "laptop": Dùng OpenCV VideoCapture với webcam để test.
 """
 
@@ -20,8 +20,7 @@ class FireCamera:
         self.running = True
         self.frame = None
         self.lock = threading.Lock()
-        self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
-        self.lens_position = 2.0  # Tiêu cự ban đầu cho cự ly 0.5m
+        self.lens_position = getattr(config, "CAMERA_LENS_POSITION", 2.0)
 
         if self.platform == "pi":
             try:
@@ -48,23 +47,20 @@ class FireCamera:
             self.picam2.start()
             print(f"[Camera] Da khoi dong Picamera2 ({config.FRAME_WIDTH}x{config.FRAME_HEIGHT} @ {target_fps}fps)")
 
-            # Cấu hình tự động lấy nét và phơi sáng cho Arducam IMX519 (BẮT BUỘC gọi sau start())
+            # Cấu hình Khóa Nét Cố Định và Giảm Chói cho Arducam IMX519 (gọi sau start())
             time.sleep(0.3)
-            if getattr(config, "CAMERA_AUTOFOCUS", True):
-                try:
-                    # AfMode 2: Continuous AF (Tự động lấy nét liên tục)
-                    self.picam2.set_controls({
-                        "AfMode": 2,
-                        "AfRange": 0,       # Full range (từ cận cảnh đến vô cực)
-                        "AfSpeed": 0,       # Fast AF
-                        "Sharpness": 1.5,   # Tăng độ nét vân lửa
-                        "ExposureValue": -0.5 # Giảm chói lóa màn hình
-                    })
-                    # Chạy 1 chu kỳ tìm nét ban đầu
-                    self.picam2.autofocus_cycle()
-                    print("[Camera] Da kich hoat Continuous Autofocus & toi uu phoi sang cho Arducam IMX519.")
-                except Exception as e:
-                    print(f"[Camera] Canh bao cau hinh AF: {e}")
+            try:
+                exp_comp = getattr(config, "CAMERA_EXPOSURE_COMP", -0.5)
+                # AfMode 0 = Manual Focus (Khóa cứng thấu kính tại cự ly làm việc cố định)
+                self.picam2.set_controls({
+                    "AfMode": 0,
+                    "LensPosition": float(self.lens_position),
+                    "Sharpness": 1.5,
+                    "ExposureValue": float(exp_comp)
+                })
+                print(f"[Camera] KHOA NET CO DINH tai LensPosition = {self.lens_position} dioptres (khoang cach ~50cm).")
+            except Exception as e:
+                print(f"[Camera] Canh bao cau hinh controls: {e}")
 
         elif self.platform == "laptop":
             self.cap = cv2.VideoCapture(config.WEBCAM_INDEX)
@@ -88,26 +84,24 @@ class FireCamera:
         while self.frame is None and (time.time() - start_wait < 5.0):
             time.sleep(0.05)
 
-
     def trigger_autofocus(self):
-        """Kích hoạt chu kỳ lấy nét tự động lại cho Arducam IMX519"""
+        """Kích hoạt chu kỳ lấy nét tự động lại nếu cần"""
         if self.platform == "pi" and hasattr(self, "picam2"):
             try:
                 self.picam2.set_controls({"AfMode": 1, "AfTrigger": 0})
                 time.sleep(0.05)
-                self.picam2.set_controls({"AfMode": 2, "AfTrigger": 1})
-                print("\n[Camera] >>> DA KICH HOAT LAY NET TU DONG (AUTOFOCUS) <<<")
+                self.picam2.set_controls({"AfMode": 1, "AfTrigger": 1})
+                print("\n[Camera] >>> DA KICH HOAT CHU KY LAY NET TU DONG <<<")
             except Exception as e:
                 print(f"[Camera] Loi Autofocus: {e}")
 
     def adjust_focus(self, step):
-        """Chỉnh tiêu cự thủ công (step: +0.5 hoặc -0.5)"""
+        """Vi chỉnh tiêu cự thủ công (step: +0.2 hoặc -0.2)"""
         if self.platform == "pi" and hasattr(self, "picam2"):
             try:
-                self.lens_position = max(0.0, min(10.0, self.lens_position + step))
-                # Chuyển AfMode sang Manual (0) và set LensPosition
+                self.lens_position = max(0.0, min(10.0, round(self.lens_position + step, 2)))
                 self.picam2.set_controls({"AfMode": 0, "LensPosition": float(self.lens_position)})
-                print(f"\n[Camera] >>> CHINH TIEU CU THU CONG: {self.lens_position:.1f} dioptres <<<")
+                print(f"\n[Camera] >>> TIEU CU HIEN TAI: {self.lens_position:.2f} dioptres <<<")
             except Exception as e:
                 print(f"[Camera] Loi Focus: {e}")
 
@@ -116,11 +110,8 @@ class FireCamera:
         while self.running:
             try:
                 if self.platform == "pi":
-                    raw = self.picam2.capture_array()
-                    if self.swap_rb:
-                        current_frame = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
-                    else:
-                        current_frame = raw
+                    # Trả về mảng RGB888 nguyên bản từ Picamera2
+                    current_frame = self.picam2.capture_array()
                 else:
                     ok, raw = self.cap.read()
                     if not ok:

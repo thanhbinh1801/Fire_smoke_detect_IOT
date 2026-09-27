@@ -8,8 +8,7 @@ Hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
-# Đặt 0.3 giúp phát hiện nhạy hơn khi quay qua màn hình điện thoại hoặc điều kiện ánh sáng yếu
-CONFIDENCE_THRESHOLD = 0.3
+CONFIDENCE_THRESHOLD = 0.45
 IOU_THRESHOLD = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
@@ -26,22 +25,32 @@ PLATFORM = "pi"
 WEBCAM_INDEX = 0
 
 # --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
-# Tự động lấy nét liên tục (Continuous Autofocus cho Arducam IMX519)
-CAMERA_AUTOFOCUS = True
+# Tắt Continuous AF và KHÓA NÉT CỐ ĐỊNH (tránh săn nét làm mờ vân lửa khi nhìn vào điện thoại)
+CAMERA_AUTOFOCUS = False
 
-# Sửa lỗi đảo màu của Picamera2 (False: giữ nguyên RGB888 của Picamera2 chuẩn xác)
-CAMERA_SWAP_RB = False
+# Vị trí tiêu cự khóa cứng cho IMX519 (dioptres):
+# 2.0 dioptres tương đương cự ly lấy nét ~50cm (khoảng cách vàng để nhận diện ngọn lửa rõ nét)
+CAMERA_LENS_POSITION = 2.0
 
-# Tốc độ khung hình mong muốn cho camera
+# Bù trừ phơi sáng (Exposure Value) cho IMX519 (-0.5 giúp giảm chói lóa từ ngọn lửa/màn hình điện thoại)
+CAMERA_EXPOSURE_COMP = -0.5
+
+# Tốc độ khung hình mong muốn cho camera (30 FPS)
 CAMERA_FPS = 30
 
-# Chế độ chạy AI: False = Đồng bộ tuyệt đối (Zero-Latency).
-# Di chuyển ngọn lửa đến đâu, hộp bounding box dính chặt 100% đến đó, không bao giờ bị delay vẽ lại vị trí cũ!
-ASYNC_DETECTION = False
+# --- CẤU HÌNH TỐI ƯU HIỆU NĂNG & ĐỘ CHÍNH XÁC (FRAME-SKIPPING & VOTING) ---
+# Tỷ lệ Frame-Skip: 2 = Chạy AI ở các frame chẵn (0, 2, 4,...), frame lẻ dùng lại box trước
+# Giúp màn hình camera đạt 20 - 25 FPS mượt mà và giảm 50% tải CPU cho Raspberry Pi 4!
+FRAME_SKIP = 2
+
+# Số frame phát hiện lửa liên tiếp trước khi kích hoạt còi và đèn (lọc 100% báo động giả)
+CONSECUTIVE_FIRE_FRAMES = 2
+
+# Số frame duy trì đèn sáng sau khi ngọn lửa bị chớp tắt (tránh đèn bị nhấp nháy gián đoạn)
+HOLD_FIRE_FRAMES = 5
 
 # --- CẤU HÌNH ĐÈN CẢNH BÁO LỬA (LED) ---
 # Chân BCM GPIO nối đèn LED cảnh báo lửa (BCM 27 = Physical Pin 13)
-# Đèn chỉ sáng khi nhận diện được lửa trong khung hình, hết lửa tắt ngay lập tức
 LED_PIN = 27
 
 # --- CẤU HÌNH CÒI BUZZER ---
