@@ -45,18 +45,26 @@ class FireCamera:
                 }
             )
             self.picam2.configure(camera_config)
+            self.picam2.start()
+            print(f"[Camera] Da khoi dong Picamera2 ({config.FRAME_WIDTH}x{config.FRAME_HEIGHT} @ {target_fps}fps)")
 
-            # Cấu hình tự động lấy nét cho Arducam IMX519
+            # Cấu hình tự động lấy nét và phơi sáng cho Arducam IMX519 (BẮT BUỘC gọi sau start())
+            time.sleep(0.3)
             if getattr(config, "CAMERA_AUTOFOCUS", True):
                 try:
                     # AfMode 2: Continuous AF (Tự động lấy nét liên tục)
-                    self.picam2.set_controls({"AfMode": 2})
-                    print("[Camera] Da bat Continuous Autofocus cho Arducam IMX519.")
+                    self.picam2.set_controls({
+                        "AfMode": 2,
+                        "AfRange": 0,       # Full range (từ cận cảnh đến vô cực)
+                        "AfSpeed": 0,       # Fast AF
+                        "Sharpness": 1.5,   # Tăng độ nét vân lửa
+                        "ExposureValue": -0.5 # Giảm chói lóa màn hình
+                    })
+                    # Chạy 1 chu kỳ tìm nét ban đầu
+                    self.picam2.autofocus_cycle()
+                    print("[Camera] Da kich hoat Continuous Autofocus & toi uu phoi sang cho Arducam IMX519.")
                 except Exception as e:
                     print(f"[Camera] Canh bao cau hinh AF: {e}")
-
-            self.picam2.start()
-            print(f"[Camera] Da khoi dong Picamera2 ({config.FRAME_WIDTH}x{config.FRAME_HEIGHT} @ {target_fps}fps)")
 
         elif self.platform == "laptop":
             self.cap = cv2.VideoCapture(config.WEBCAM_INDEX)
