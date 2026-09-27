@@ -29,15 +29,15 @@ WEBCAM_INDEX = 0
 # Tự động lấy nét liên tục (Continuous Autofocus cho Arducam IMX519)
 CAMERA_AUTOFOCUS = True
 
-# Sửa lỗi đảo màu của Picamera2 (False: giữ nguyên RGB888 của Picamera2, True: đảo kênh R-B)
-# Trong lúc chạy, bạn có thể nhấn phím 'c' trên cửa sổ camera để đảo màu qua lại tức thì
+# Sửa lỗi đảo màu của Picamera2 (False: giữ nguyên RGB888 của Picamera2 chuẩn xác)
 CAMERA_SWAP_RB = False
 
-# Tốc độ khung hình mong muốn cho camera (30 FPS)
+# Tốc độ khung hình mong muốn cho camera
 CAMERA_FPS = 30
 
-# Chạy AI song song (Asynchronous) giúp màn hình camera mượt 25 - 30 FPS không bị giật lag
-ASYNC_DETECTION = True
+# Chế độ chạy AI: Đặt False để đồng bộ hoàn toàn giữa camera và bounding box
+# (Di chuyển đến đâu box bám dính chính xác đến đó, không bị delay vẽ lại vị trí cũ)
+ASYNC_DETECTION = False
 
 # --- CẤU HÌNH ĐÈN CẢNH BÁO LỬA (LED) ---
 # Chân BCM GPIO nối đèn LED cảnh báo lửa (BCM 27 = Physical Pin 13)

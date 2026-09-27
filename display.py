@@ -72,9 +72,9 @@ def draw_overlay(frame, detections, fps=None, color_mode="RAW"):
         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA
     )
 
-    help_str = "[c]: Doi mau | [f]: Lay net | [q]: Thoat"
+    help_str = "[f]: Lay net | [q]: Thoat"
     cv2.putText(
-        frame, help_str, (w - 330, h - 9),
+        frame, help_str, (w - 220, h - 9),
         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA
     )
 
@@ -85,7 +85,6 @@ def show(frame):
     Hiện frame lên cửa sổ.
     Trả về hành động phím:
     - 'quit': nếu nhấn 'q' hoặc ESC
-    - 'color': nếu nhấn 'c' để đổi màu
     - 'focus': nếu nhấn 'f' để lấy nét
     - 'focus_near': nếu nhấn ']' để nét gần
     - 'focus_far': nếu nhấn '[' để nét xa
@@ -95,8 +94,6 @@ def show(frame):
     key = cv2.waitKey(1) & 0xFF
     if key in (ord('q'), 27):
         return 'quit'
-    elif key == ord('c'):
-        return 'color'
     elif key == ord('f'):
         return 'focus'
     elif key in (ord(']'), ord('='), ord('+')):

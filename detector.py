@@ -88,24 +88,13 @@ class FireSmokeDetector:
         else:
             resized = frame
 
-        # Thử nghiệm với kênh màu RGB chuẩn
+        # Chuyển BGR sang RGB và chạy inference duy nhất 1 lần (tối ưu tốc độ cao nhất)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         preds = self._forward(rgb)
 
         scores_matrix = preds[:, 4:]
         confidences = np.max(scores_matrix, axis=1)
         max_score = float(np.max(confidences))
-
-        # Nếu độ tin cậy < 0.2, thử chạy trên ảnh gốc resized (phòng trường hợp frame vốn đã là RGB)
-        if max_score < 0.2:
-            preds_alt = self._forward(resized)
-            scores_alt = preds_alt[:, 4:]
-            conf_alt = np.max(scores_alt, axis=1)
-            max_score_alt = float(np.max(conf_alt))
-            if max_score_alt > max_score:
-                preds = preds_alt
-                confidences = conf_alt
-                max_score = max_score_alt
 
         # Debug log định kỳ nếu phát hiện có tín hiệu lửa/khói nhưng điểm chưa vượt ngưỡng
         now = time.time()

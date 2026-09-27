@@ -80,12 +80,6 @@ class FireCamera:
         while self.frame is None and (time.time() - start_wait < 5.0):
             time.sleep(0.05)
 
-    def toggle_color_swap(self):
-        """Đảo kênh màu qua lại trực tiếp khi đang chạy"""
-        self.swap_rb = not self.swap_rb
-        mode = "DAO KENH R-B" if self.swap_rb else "GIU NGUYEN (RAW)"
-        print(f"\n[Camera] >>> DA CHUYEN CHE DO MAU: {mode} <<<")
-        return self.swap_rb
 
     def trigger_autofocus(self):
         """Kích hoạt chu kỳ lấy nét tự động lại cho Arducam IMX519"""
