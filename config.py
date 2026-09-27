@@ -35,9 +35,15 @@ CAMERA_SWAP_RB = False
 # Tốc độ khung hình mong muốn cho camera
 CAMERA_FPS = 30
 
-# Chế độ chạy AI: Đặt False để đồng bộ hoàn toàn giữa camera và bounding box
-# (Di chuyển đến đâu box bám dính chính xác đến đó, không bị delay vẽ lại vị trí cũ)
-ASYNC_DETECTION = False
+# Chạy AI song song (Asynchronous):
+# Với model 256 siêu nhẹ (~40ms), chế độ này giúp màn hình camera đạt 25 - 30 FPS mượt mà
+# mà không hề bị trễ bounding box!
+ASYNC_DETECTION = True
+
+# --- CẤU HÌNH LỌC CHỐNG CHẬP CHỜN (TEMPORAL PERSISTENCE) ---
+# Số frame tạm giữ bounding box và đèn sáng khi ngọn lửa bị chớp/mất tín hiệu tức thời
+# Triệt tiêu hiện tượng: frame 1,2 nhận diện được, frame 3,4 mất, frame 5,6 lại có
+BOX_PERSISTENCE = 4
 
 # --- CẤU HÌNH ĐÈN CẢNH BÁO LỬA (LED) ---
 # Chân BCM GPIO nối đèn LED cảnh báo lửa (BCM 27 = Physical Pin 13)

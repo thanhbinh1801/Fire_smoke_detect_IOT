@@ -1,7 +1,10 @@
 # main.py
 """
-Chương trình chính: Hệ thống Giám sát & Nhận diện Khói Lửa Thông Minh
-Chạy được trên Laptop (Webcam) và Raspberry Pi 4 (Arducam CSI + Passive Buzzer).
+Chương trình chính: Hệ thống Giám sát & Nhận diện Lửa Thông Minh
+Chạy được trên Laptop (Webcam) và Raspberry Pi 4 (Arducam IMX519 + Passive Buzzer + LED).
+Tối ưu:
+- Hỗ trợ ASYNC 25-30 FPS mượt mà với model ONNX 256x256 siêu nhẹ.
+- Tích hợp Temporal Persistence Filter chống chập chờn (mất tín hiệu giữa các frame).
 """
 
 import os
@@ -10,7 +13,6 @@ import time
 import threading
 import cv2
 
-# Đảm bảo in tiếng Việt/ký tự đặc biệt không bị crash trên console Windows (cp1252)
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -26,7 +28,7 @@ import display
 
 def main():
     print("=" * 60)
-    print(">>> HE THONG NHAN DIEN KHOI & LUA (CAMERA AI + IOT) <<<")
+    print(">>> HE THONG NHAN DIEN LUA THONG MINH (CAMERA AI + IOT) <<<")
     print(f"Nen tang cau hinh: {config.PLATFORM.upper()}")
     print("=" * 60)
 
@@ -47,9 +49,10 @@ def main():
     current_fps = 0.0
 
     async_detection = getattr(config, "ASYNC_DETECTION", True)
+    persistence_limit = getattr(config, "BOX_PERSISTENCE", 4)
 
     if async_detection:
-        # --- CHẾ ĐỘ ASYNC (GIÚP MÀN HÌNH CAMERA ĐẠT 25-30 FPS MƯỢT MÀ) ---
+        # --- CHẾ ĐỘ ASYNC SIÊU MƯỢT (CAMERA ĐẠT 25-30 FPS, BÁM VẾT LIÊN TỤC) ---
         detections_lock = threading.Lock()
         latest_detections = []
         is_running = True
@@ -58,8 +61,10 @@ def main():
 
         def ai_worker():
             nonlocal latest_detections, current_ai_frame
+            persistence_counter = 0
+            persisted_results = []
+
             while is_running:
-                # Đợi có frame mới cần nhận diện
                 if not new_frame_event.wait(timeout=0.1):
                     continue
                 new_frame_event.clear()
@@ -69,14 +74,14 @@ def main():
                         continue
                     frame_to_detect = current_ai_frame.copy()
 
-                # Chạy AI nhận diện
                 results = detector.detect(frame_to_detect)
-                has_fire = any(d["label"].lower() == "fire" for d in results) if results else False
-
-                # Đèn CHỈ SÁNG khi nhận diện được lửa
-                alert.set_fire_led(has_fire)
 
                 if results:
+                    # Có lửa: nạp lại bộ đếm giữ vết và bật đèn LED
+                    persistence_counter = persistence_limit
+                    persisted_results = results
+                    alert.set_fire_led(True)
+
                     confs = [round(d["conf"], 2) for d in results]
                     print(f"[CANH BAO] PHAT HIEN LUA! Confidence: {confs}")
                     alert.trigger()
@@ -88,8 +93,20 @@ def main():
                         )
                         cv2.imwrite(filename, frame_to_detect)
 
-                with detections_lock:
-                    latest_detections = results
+                    with detections_lock:
+                        latest_detections = results
+                else:
+                    # Tạm thời không thấy lửa: kiểm tra bộ đếm giữ vết chống chập chờn
+                    if persistence_counter > 0:
+                        persistence_counter -= 1
+                        alert.set_fire_led(True)
+                        with detections_lock:
+                            latest_detections = persisted_results
+                    else:
+                        persisted_results = []
+                        alert.set_fire_led(False)
+                        with detections_lock:
+                            latest_detections = []
 
         ai_thread = threading.Thread(target=ai_worker, daemon=True)
         ai_thread.start()
@@ -101,7 +118,7 @@ def main():
                     time.sleep(0.01)
                     continue
 
-                # Cung cấp frame mới nhất cho AI worker nếu worker đã xử lý xong frame cũ
+                # Đưa frame mới cho AI worker xử lý
                 if not new_frame_event.is_set():
                     with detections_lock:
                         current_ai_frame = frame
@@ -150,7 +167,10 @@ def main():
             print("[He thong] Da dung an toan. Tam biet!")
 
     else:
-        # --- CHẾ ĐỘ TUẦN TỰ (SYNCHRONOUS) ---
+        # --- CHẾ ĐỘ TUẦN TỰ (SYNCHRONOUS) KÈM CHỐNG CHẬP CHỜN ---
+        persistence_counter = 0
+        persisted_results = []
+
         try:
             while True:
                 frame = camera.get_frame()
@@ -158,12 +178,14 @@ def main():
                     time.sleep(0.01)
                     continue
 
-                detections = detector.detect(frame)
-                has_fire = any(d["label"].lower() == "fire" for d in detections) if detections else False
-                alert.set_fire_led(has_fire)
+                results = detector.detect(frame)
 
-                if detections:
-                    confs = [round(d["conf"], 2) for d in detections]
+                if results:
+                    persistence_counter = persistence_limit
+                    persisted_results = results
+                    alert.set_fire_led(True)
+
+                    confs = [round(d["conf"], 2) for d in results]
                     print(f"[CANH BAO] PHAT HIEN LUA! Confidence: {confs}")
                     alert.trigger()
 
@@ -173,6 +195,16 @@ def main():
                             config.SNAPSHOT_DIR, f"alert_{timestamp_str}_{int(time.time() * 1000) % 1000}.jpg"
                         )
                         cv2.imwrite(filename, frame)
+                    detections_to_draw = results
+                else:
+                    if persistence_counter > 0:
+                        persistence_counter -= 1
+                        alert.set_fire_led(True)
+                        detections_to_draw = persisted_results
+                    else:
+                        persisted_results = []
+                        alert.set_fire_led(False)
+                        detections_to_draw = []
 
                 frame_count += 1
                 elapsed = time.time() - fps_start_time
@@ -182,7 +214,7 @@ def main():
                     fps_start_time = time.time()
 
                 if config.SHOW_DISPLAY:
-                    display_frame = display.draw_overlay(frame.copy(), detections, fps=current_fps)
+                    display_frame = display.draw_overlay(frame.copy(), detections_to_draw, fps=current_fps)
                     action = display.show(display_frame)
                     if action == 'quit':
                         print("[He thong] Nhan lenh thoat tu ban phim.")
