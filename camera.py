@@ -129,16 +129,19 @@ class FireCamera:
             try:
                 if self.platform == "pi":
                     raw = self.picam2.capture_array()
+                    # Picamera2 trả về mảng RGB trong bộ nhớ; chuyển sang BGR chuẩn OpenCV
+                    base_bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
                 else:
                     ok, raw = self.cap.read()
                     if not ok:
                         time.sleep(0.01)
                         continue
+                    base_bgr = raw
 
                 if self.swap_rb:
-                    current_frame = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+                    current_frame = cv2.cvtColor(base_bgr, cv2.COLOR_BGR2RGB)
                 else:
-                    current_frame = raw
+                    current_frame = base_bgr
 
                 with self.lock:
                     self.frame = current_frame

@@ -11,6 +11,11 @@ Tối ưu hóa toàn diện cho Raspberry Pi 4 + Arducam IMX519:
 
 import os
 import sys
+
+# Dập tắt cảnh báo Wayland & QFontDatabase của OpenCV Qt trên Linux / Raspberry Pi
+os.environ["QT_LOGGING_RULES"] = "*=false;*.debug=false;qt.qpa.*=false"
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
 import time
 import cv2
 

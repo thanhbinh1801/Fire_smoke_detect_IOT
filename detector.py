@@ -28,7 +28,7 @@ class FireSmokeDetector:
         print(f"[Detector] Dang nap model ONNX: {self.model_path} ...")
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        opts.intra_op_num_threads = 4  # Tận dụng 4 cores của Pi 4
+        opts.intra_op_num_threads = 3  # Dùng 3 cores cho AI, để 1 core cho Camera, GUI và OS
         self.session = ort.InferenceSession(
             self.model_path,
             sess_options=opts,
