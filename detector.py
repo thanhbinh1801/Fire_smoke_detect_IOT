@@ -213,9 +213,6 @@ class AsyncFireDetector:
     def get_detections(self):
         """Lấy kết quả nhận diện mới nhất (không chặn, O(1)) kèm AI FPS"""
         with self.lock:
-            # Nếu kết quả đã cũ quá 0.35s (khi lia máy đi chỗ khác), không lưu box cũ
-            if time.time() - self.last_update_time > 0.35:
-                return [], self.ai_fps
             return list(self.latest_detections), self.ai_fps
 
     def stop(self):

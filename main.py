@@ -55,12 +55,11 @@ def main():
     fps_start_time = time.time()
     cam_fps = 0.0
 
-    consecutive_fire = 0
-    hold_counter = 0
+    last_fire_time = 0.0
+    cached_detections = []
     is_fire_confirmed = False
 
-    req_consecutive = getattr(config, "CONSECUTIVE_FIRE_FRAMES", 2)
-    hold_limit = getattr(config, "HOLD_FIRE_FRAMES", 5)
+    hold_duration = getattr(config, "HOLD_FIRE_TIME", 1.5)
 
     try:
         while True:
@@ -75,22 +74,21 @@ def main():
             current_detections, ai_fps = async_detector.get_detections()
 
             has_fire_now = len(current_detections) > 0
+            now = time.time()
 
-            # 3. Bộ lọc xác nhận đa tầng (Temporal Confirmation + Hold Buffer)
+            # 3. Bộ lọc thời gian thực ổn định (Time-based Stabilization)
+            # Giúp giữ còi/đèn và box mượt mà, loại bỏ 100% hiện tượng chớp tắt liên tục
             if has_fire_now:
-                consecutive_fire += 1
-                if consecutive_fire >= req_consecutive:
-                    is_fire_confirmed = True
-                    hold_counter = hold_limit
+                last_fire_time = now
+                cached_detections = current_detections
+                is_fire_confirmed = True
             else:
-                consecutive_fire = 0
-                if hold_counter > 0:
-                    hold_counter -= 1
-                    is_fire_confirmed = True
-                else:
+                # Chỉ khi quá 1.5 giây liên tục không thấy lửa thì mới xác nhận tắt cảnh báo
+                if now - last_fire_time >= hold_duration:
                     is_fire_confirmed = False
+                    cached_detections = []
 
-            # 4. Điều khiển đèn LED GPIO 27 (sáng ổn định không chập chờn)
+            # 4. Điều khiển đèn LED GPIO 27 (Sáng ổn định tuyệt đối, không nhấp nháy chập chờn)
             alert.set_fire_led(is_fire_confirmed)
 
             # 5. Kích hoạt còi báo động khi ngọn lửa đã được xác thực
@@ -115,10 +113,16 @@ def main():
                 frame_count = 0
                 fps_start_time = time.time()
 
-            # 7. Hiển thị lên màn hình mượt mà
+            # 7. Hiển thị lên màn hình mượt mà không nhấp nháy
             if config.SHOW_DISPLAY:
-                # Chỉ vẽ box khi hiện tại đang thấy lửa (loại bỏ độ trễ lưu box ở vị trí cũ khi di chuyển)
-                detections_to_draw = current_detections if has_fire_now else []
+                # Vẽ box: Ưu tiên box hiện tại; nếu lửa chớp tắt trong < 0.6s thì giữ box đệm để nhìn mượt mà
+                if has_fire_now:
+                    detections_to_draw = current_detections
+                elif now - last_fire_time < 0.6:
+                    detections_to_draw = cached_detections
+                else:
+                    detections_to_draw = []
+
                 display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
                 action = display.show(display_frame)
                 if action == 'quit':

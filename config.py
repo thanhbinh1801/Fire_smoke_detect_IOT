@@ -8,7 +8,7 @@ Hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
-CONFIDENCE_THRESHOLD = 0.35
+CONFIDENCE_THRESHOLD = 0.30
 IOU_THRESHOLD = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
@@ -44,11 +44,8 @@ CAMERA_FPS = 30
 # Tỷ lệ Frame-Skip dùng cho luồng đồng bộ dự phòng (khi không chạy async)
 FRAME_SKIP = 2
 
-# Số frame phát hiện lửa liên tiếp trước khi kích hoạt còi và đèn (lọc 100% báo động giả)
-CONSECUTIVE_FIRE_FRAMES = 2
-
-# Số frame duy trì đèn sáng sau khi ngọn lửa bị chớp tắt (tránh đèn bị nhấp nháy gián đoạn)
-HOLD_FIRE_FRAMES = 5
+# Thời gian duy trì đèn LED sáng (giây) sau khi ngọn lửa bị chớp tắt (tránh đèn bị nhấp nháy gián đoạn)
+HOLD_FIRE_TIME = 1.5
 
 # --- CẤU HÌNH ĐÈN CẢNH BÁO LỬA (LED) ---
 # Chân BCM GPIO nối đèn LED cảnh báo lửa (BCM 27 = Physical Pin 13)
