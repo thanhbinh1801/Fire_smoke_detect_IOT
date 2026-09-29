@@ -170,6 +170,7 @@ class AsyncFireDetector:
 
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
+        self.last_update_time = time.time()
         print("[AsyncDetector] Da khoi chay luong AI suy luan ngam (Async Thread).")
 
     def update_frame(self, frame):
@@ -182,8 +183,8 @@ class AsyncFireDetector:
         count = 0
         t0 = time.time()
         while self.running:
-            # Chờ có frame mới cần xử lý (timeout 0.1s để không ngắt ngang khi dừng)
-            if not self.has_new_frame.wait(timeout=0.1):
+            # Chờ có frame mới cần xử lý (timeout 0.05s)
+            if not self.has_new_frame.wait(timeout=0.05):
                 continue
             self.has_new_frame.clear()
 
@@ -198,6 +199,7 @@ class AsyncFireDetector:
                 dets = self.detector.detect(frame_to_process)
                 with self.lock:
                     self.latest_detections = dets
+                    self.last_update_time = time.time()
             except Exception as e:
                 print(f"[AsyncDetector] Loi suy luan AI: {e}")
 
@@ -211,6 +213,9 @@ class AsyncFireDetector:
     def get_detections(self):
         """Lấy kết quả nhận diện mới nhất (không chặn, O(1)) kèm AI FPS"""
         with self.lock:
+            # Nếu kết quả đã cũ quá 0.35s (khi lia máy đi chỗ khác), không lưu box cũ
+            if time.time() - self.last_update_time > 0.35:
+                return [], self.ai_fps
             return list(self.latest_detections), self.ai_fps
 
     def stop(self):

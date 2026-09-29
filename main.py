@@ -117,8 +117,8 @@ def main():
 
             # 7. Hiển thị lên màn hình mượt mà
             if config.SHOW_DISPLAY:
-                # Vẽ box nếu có phát hiện hoặc đang trong thời gian giữ cảnh báo
-                detections_to_draw = current_detections if is_fire_confirmed else []
+                # Chỉ vẽ box khi hiện tại đang thấy lửa (loại bỏ độ trễ lưu box ở vị trí cũ khi di chuyển)
+                detections_to_draw = current_detections if has_fire_now else []
                 display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
                 action = display.show(display_frame)
                 if action == 'quit':
