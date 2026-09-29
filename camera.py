@@ -38,7 +38,7 @@ class FireCamera:
             camera_config = self.picam2.create_video_configuration(
                 main={
                     "size": (config.FRAME_WIDTH, config.FRAME_HEIGHT),
-                    "format": "RGB888"
+                    "format": "BGR888"
                 },
                 controls={
                     "FrameRate": target_fps
@@ -46,20 +46,30 @@ class FireCamera:
             )
             self.picam2.configure(camera_config)
             self.picam2.start()
-            print(f"[Camera] Da khoi dong Picamera2 ({config.FRAME_WIDTH}x{config.FRAME_HEIGHT} @ {target_fps}fps)")
+            print(f"[Camera] Da khoi dong Picamera2 ({config.FRAME_WIDTH}x{config.FRAME_HEIGHT} BGR888 @ {target_fps}fps)")
 
-            # Cấu hình Khóa Nét Cố Định và Giảm Chói cho Arducam IMX519 (gọi sau start())
+            # Cấu hình Lấy Nét Tự Động (Continuous AF) và Phơi Sáng cho Arducam IMX519
             time.sleep(0.3)
             try:
                 exp_comp = getattr(config, "CAMERA_EXPOSURE_COMP", -0.5)
-                # AfMode 0 = Manual Focus (Khóa cứng thấu kính tại cự ly làm việc cố định)
-                self.picam2.set_controls({
-                    "AfMode": 0,
-                    "LensPosition": float(self.lens_position),
+                auto_focus = getattr(config, "CAMERA_AUTOFOCUS", True)
+
+                ctrls = {
                     "Sharpness": 1.5,
                     "ExposureValue": float(exp_comp)
-                })
-                print(f"[Camera] KHOA NET CO DINH tai LensPosition = {self.lens_position} dioptres (khoang cach ~50cm).")
+                }
+
+                if auto_focus:
+                    # AfMode 2 = Continuous Auto Focus (Tự động bám nét liên tục ở mọi khoảng cách)
+                    ctrls["AfMode"] = 2
+                    print("[Camera] DA BAT LAY NET TU DONG LIEN TUC (Continuous AF - AfMode=2).")
+                else:
+                    # AfMode 0 = Manual Focus (Khóa cứng thấu kính)
+                    ctrls["AfMode"] = 0
+                    ctrls["LensPosition"] = float(self.lens_position)
+                    print(f"[Camera] KHOA NET CO DINH tai LensPosition = {self.lens_position} dioptres.")
+
+                self.picam2.set_controls(ctrls)
             except Exception as e:
                 print(f"[Camera] Canh bao cau hinh controls: {e}")
 

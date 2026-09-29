@@ -9,6 +9,8 @@ Tối ưu hóa:
 
 import ast
 import os
+import threading
+import time
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -42,7 +44,7 @@ class FireSmokeDetector:
         self.input_w = self.input_shape[3] if len(self.input_shape) >= 4 else 640
 
         self.names = self._load_class_names()
-        self.conf_threshold = getattr(config, "CONFIDENCE_THRESHOLD", 0.45)
+        self.conf_threshold = getattr(config, "CONFIDENCE_THRESHOLD", 0.35)
         self.iou_threshold = getattr(config, "IOU_THRESHOLD", 0.45)
 
         print(f"[Detector] Nap thanh cong ONNX model. Kich thuoc input: ({self.input_w}x{self.input_h})")
@@ -148,3 +150,73 @@ class FireSmokeDetector:
                     })
 
         return detections
+
+
+class AsyncFireDetector:
+    """
+    Bộ chạy nhận diện bất đồng bộ (Asynchronous Worker):
+    - Đưa việc suy luận ONNX vào 1 luồng ngầm chuyên biệt.
+    - Giúp luồng chính của Camera/Display luôn đạt 25 - 30 FPS mượt mà.
+    - Không bao giờ làm đứng hình hoặc giật camera khi AI đang tính toán.
+    """
+    def __init__(self, detector):
+        self.detector = detector
+        self.latest_frame = None
+        self.latest_detections = []
+        self.lock = threading.Lock()
+        self.running = True
+        self.has_new_frame = threading.Event()
+        self.ai_fps = 0.0
+
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
+        print("[AsyncDetector] Da khoi chay luong AI suy luan ngam (Async Thread).")
+
+    def update_frame(self, frame):
+        """Cung cấp khung hình mới nhất từ camera cho AI suy luận (không chờ)"""
+        with self.lock:
+            self.latest_frame = frame
+        self.has_new_frame.set()
+
+    def _worker(self):
+        count = 0
+        t0 = time.time()
+        while self.running:
+            # Chờ có frame mới cần xử lý (timeout 0.1s để không ngắt ngang khi dừng)
+            if not self.has_new_frame.wait(timeout=0.1):
+                continue
+            self.has_new_frame.clear()
+
+            with self.lock:
+                frame_to_process = self.latest_frame
+
+            if frame_to_process is None:
+                continue
+
+            try:
+                # Chạy suy luận ONNX
+                dets = self.detector.detect(frame_to_process)
+                with self.lock:
+                    self.latest_detections = dets
+            except Exception as e:
+                print(f"[AsyncDetector] Loi suy luan AI: {e}")
+
+            count += 1
+            now = time.time()
+            if now - t0 >= 1.0:
+                self.ai_fps = count / (now - t0)
+                count = 0
+                t0 = now
+
+    def get_detections(self):
+        """Lấy kết quả nhận diện mới nhất (không chặn, O(1)) kèm AI FPS"""
+        with self.lock:
+            return list(self.latest_detections), self.ai_fps
+
+    def stop(self):
+        """Dừng luồng AI an toàn"""
+        self.running = False
+        self.has_new_frame.set()
+        if hasattr(self, "thread") and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+

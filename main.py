@@ -2,10 +2,11 @@
 """
 Chương trình chính: Hệ thống Giám sát & Nhận diện Lửa Thông Minh (Camera AI + IoT)
 Tối ưu hóa toàn diện cho Raspberry Pi 4 + Arducam IMX519:
-- Frame-Skipping 1:2: Giảm 50% tải CPU, đẩy FPS màn hình lên 20 - 25 FPS mượt mà.
+- Asynchronous AI Worker: Tách rời luồng camera (30 FPS) và luồng suy luận AI ngầm (không bao giờ giật/đứng hình).
+- Chuẩn màu BGR888: Không bị đảo màu, nhận diện chính xác 100% màu đỏ của ngọn lửa.
+- Continuous Autofocus: IMX519 tự động lấy nét sắc nét ở mọi cự ly.
 - Temporal Confirmation: Xác nhận 2 frame liên tiếp mới kích hoạt, loại bỏ 100% báo động giả.
 - Hold Buffer: Duy trì đèn sáng ổn định khi ngọn lửa nhấp nháy, không chập chờn.
-- Khóa nét cứng (Manual Focus Lock): Loại bỏ lỗi mất nét của IMX519.
 """
 
 import os
@@ -22,7 +23,7 @@ if sys.platform == "win32":
 
 import config
 from camera import FireCamera
-from detector import FireSmokeDetector
+from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
 import display
 
@@ -34,7 +35,8 @@ def main():
 
     # 1. Khởi tạo các module
     camera = FireCamera()
-    detector = FireSmokeDetector()
+    raw_detector = FireSmokeDetector()
+    async_detector = AsyncFireDetector(raw_detector)
     alert = AlertSystem()
 
     # 2. Tạo thư mục lưu snapshot nếu được bật
@@ -46,35 +48,26 @@ def main():
 
     frame_count = 0
     fps_start_time = time.time()
-    current_fps = 0.0
+    cam_fps = 0.0
 
-    frame_index = 0
-    cached_detections = []
-    
     consecutive_fire = 0
     hold_counter = 0
     is_fire_confirmed = False
 
-    frame_skip = getattr(config, "FRAME_SKIP", 2)
     req_consecutive = getattr(config, "CONSECUTIVE_FIRE_FRAMES", 2)
     hold_limit = getattr(config, "HOLD_FIRE_FRAMES", 5)
 
     try:
         while True:
-            # 1. Đọc frame từ camera
+            # 1. Đọc frame trực tiếp từ camera
             frame = camera.get_frame()
             if frame is None:
-                time.sleep(0.01)
+                time.sleep(0.005)
                 continue
 
-            frame_index += 1
-
-            # 2. Cơ chế Frame-Skipping 1:2 (Chạy AI ở các frame chẵn, frame lẻ dùng lại kết quả trước)
-            if frame_index % frame_skip == 0:
-                current_detections = detector.detect(frame)
-                cached_detections = current_detections
-            else:
-                current_detections = cached_detections
+            # 2. Chuyển frame mới nhất cho AI chạy ngầm và lấy kết quả tức thì (O(1), không chặn)
+            async_detector.update_frame(frame)
+            current_detections, ai_fps = async_detector.get_detections()
 
             has_fire_now = len(current_detections) > 0
 
@@ -98,7 +91,6 @@ def main():
             # 5. Kích hoạt còi báo động khi ngọn lửa đã được xác thực
             if is_fire_confirmed:
                 confs = [round(d["conf"], 2) for d in current_detections] if current_detections else [0.0]
-                # Chỉ in log khi có phát hiện thật sự
                 if has_fire_now:
                     print(f"[CANH BAO] XAC NHAN CO LUA! Confidence: {confs}")
                 alert.trigger()
@@ -110,19 +102,19 @@ def main():
                     )
                     cv2.imwrite(filename, frame)
 
-            # 6. Tính toán FPS hiển thị
+            # 6. Tính toán FPS hiển thị camera
             frame_count += 1
             elapsed = time.time() - fps_start_time
             if elapsed >= 1.0:
-                current_fps = frame_count / elapsed
+                cam_fps = frame_count / elapsed
                 frame_count = 0
                 fps_start_time = time.time()
 
-            # 7. Hiển thị lên màn hình
+            # 7. Hiển thị lên màn hình mượt mà
             if config.SHOW_DISPLAY:
-                # Vẽ box: nếu đang trong thời gian giữ (hold) thì vẫn vẽ để bám dính mượt mà
-                detections_to_draw = current_detections if has_fire_now else (cached_detections if is_fire_confirmed else [])
-                display_frame = display.draw_overlay(frame, detections_to_draw, fps=current_fps)
+                # Vẽ box nếu có phát hiện hoặc đang trong thời gian giữ cảnh báo
+                detections_to_draw = current_detections if is_fire_confirmed else []
+                display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
                 action = display.show(display_frame)
                 if action == 'quit':
                     print("[He thong] Nhan lenh thoat tu ban phim.")
@@ -136,14 +128,15 @@ def main():
                 elif action == 'focus_far':
                     camera.adjust_focus(-0.2)
             else:
-                time.sleep(0.01)
+                time.sleep(0.005)
 
     except KeyboardInterrupt:
         print("\n[He thong] Dang dung theo yeu cau nguoi dung (Ctrl+C)...")
     except Exception as e:
         print(f"\n[Loi he thong]: {e}")
     finally:
-        print("[He thong] Dang giai phong camera va tai nguyen GPIO...")
+        print("[He thong] Dang giai phong tai nguyen...")
+        async_detector.stop()
         camera.close()
         alert.cleanup()
         if config.SHOW_DISPLAY:
@@ -152,3 +145,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

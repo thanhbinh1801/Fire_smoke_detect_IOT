@@ -8,7 +8,7 @@ Hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
-CONFIDENCE_THRESHOLD = 0.45
+CONFIDENCE_THRESHOLD = 0.35
 IOU_THRESHOLD = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
@@ -25,25 +25,23 @@ PLATFORM = "pi"
 WEBCAM_INDEX = 0
 
 # --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
-# Tắt Continuous AF và KHÓA NÉT CỐ ĐỊNH (tránh săn nét làm mờ vân lửa khi nhìn vào điện thoại)
-CAMERA_AUTOFOCUS = False
+# Bật lấy nét tự động liên tục (Continuous AF: AfMode=2) giúp hình ảnh luôn sắc nét ở mọi cự ly
+CAMERA_AUTOFOCUS = True
 
-# Vị trí tiêu cự khóa cứng cho IMX519 (dioptres):
-# 2.0 dioptres tương đương cự ly lấy nét ~50cm (khoảng cách vàng để nhận diện ngọn lửa rõ nét)
-CAMERA_LENS_POSITION = 2.0
+# Vị trí tiêu cự thủ công dự phòng khi tắt AF (dioptres, 0.0=vô cực, 2.0=50cm)
+CAMERA_LENS_POSITION = 1.0
 
 # Bù trừ phơi sáng (Exposure Value) cho IMX519 (-0.5 giúp giảm chói lóa từ ngọn lửa/màn hình điện thoại)
 CAMERA_EXPOSURE_COMP = -0.5
 
-# Đảo kênh màu R-B (False = giữ nguyên khung hình gốc hiển thị đỏ chuẩn, True = đảo R-B). Có thể bấm 'c' khi đang chạy.
+# Đảo kênh màu R-B (False = mặc định BGR chuẩn OpenCV). Có thể bấm 'c' khi đang chạy.
 CAMERA_SWAP_RB = False
 
 # Tốc độ khung hình mong muốn cho camera (30 FPS)
 CAMERA_FPS = 30
 
-# --- CẤU HÌNH TỐI ƯU HIỆU NĂNG & ĐỘ CHÍNH XÁC (FRAME-SKIPPING & VOTING) ---
-# Tỷ lệ Frame-Skip: 2 = Chạy AI ở các frame chẵn (0, 2, 4,...), frame lẻ dùng lại box trước
-# Giúp màn hình camera đạt 20 - 25 FPS mượt mà và giảm 50% tải CPU cho Raspberry Pi 4!
+# --- CẤU HÌNH TỐI ƯU HIỆU NĂNG & ĐỘ CHÍNH XÁC (ASYNC WORKER & VOTING) ---
+# Tỷ lệ Frame-Skip dùng cho luồng đồng bộ dự phòng (khi không chạy async)
 FRAME_SKIP = 2
 
 # Số frame phát hiện lửa liên tiếp trước khi kích hoạt còi và đèn (lọc 100% báo động giả)

@@ -13,7 +13,7 @@ Module hiển thị hình ảnh trực tiếp lên màn hình (qua OpenCV GUI).
 import cv2
 import config
 
-def draw_overlay(frame, detections, fps=None):
+def draw_overlay(frame, detections, fps=None, ai_fps=None):
     """
     Vẽ thông tin nhận diện và trạng thái lên frame.
     Trả về frame đã vẽ (định dạng BGR cho OpenCV imshow).
@@ -67,7 +67,12 @@ def draw_overlay(frame, detections, fps=None):
 
     # Thanh trạng thái dưới cùng (FPS + Hướng dẫn phím)
     cv2.rectangle(render_frame, (0, h - 30), (w, h), (20, 20, 20), -1)
-    fps_str = f"FPS: {fps:.1f}" if fps is not None else "FPS: --"
+    if fps is not None and ai_fps is not None and ai_fps > 0:
+        fps_str = f"Cam: {fps:.1f} FPS | AI: {ai_fps:.1f} FPS"
+    elif fps is not None:
+        fps_str = f"FPS: {fps:.1f}"
+    else:
+        fps_str = "FPS: --"
     cv2.putText(
         render_frame, fps_str, (15, h - 9),
         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA
