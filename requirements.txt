@@ -1,7 +1,8 @@
 # --- CÁC THƯ VIỆN AI & XỬ LÝ ẢNH (CHẠY TRÊN RASPBERRY PI VÀ LAPTOP) ---
 # Sử dụng ONNX Runtime thay cho Ultralytics/PyTorch để tiết kiệm RAM và dung lượng
 onnxruntime>=1.15.0
-opencv-python>=4.8.0
+# Dùng headless để tránh lỗi Qt trên Pi không có màn hình (web dashboard thay thế)
+opencv-python-headless>=4.8.0
 numpy>=1.23.0
 flask>=3.0.0
 
