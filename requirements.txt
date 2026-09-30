@@ -3,6 +3,7 @@
 onnxruntime>=1.15.0
 opencv-python>=4.8.0
 numpy>=1.23.0
+flask>=3.0.0
 
 # --- LƯU Ý PHẦN CỨNG TRÊN RASPBERRY PI OS ---
 # Hai thư viện picamera2 và gpiozero được quản lý bởi hệ điều hành Pi OS,

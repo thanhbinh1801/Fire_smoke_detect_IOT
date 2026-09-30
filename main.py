@@ -31,6 +31,8 @@ from camera import FireCamera
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
 import display
+import web_state
+import web_server
 
 def main():
     print("=" * 60)
@@ -44,7 +46,10 @@ def main():
     async_detector = AsyncFireDetector(raw_detector)
     alert = AlertSystem()
 
-    # 2. Tạo thư mục lưu snapshot nếu được bật
+    # 2. Khởi động web server dashboard (daemon thread)
+    web_server.start(port=getattr(config, "WEB_PORT", 5000))
+
+    # 3. Tạo thư mục lưu snapshot nếu được bật
     if config.SAVE_SNAPSHOT:
         os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
 
@@ -114,16 +119,23 @@ def main():
                 fps_start_time = time.time()
 
             # 7. Hiển thị lên màn hình mượt mà không nhấp nháy
-            if config.SHOW_DISPLAY:
-                # Vẽ box: Ưu tiên box hiện tại; nếu lửa chớp tắt trong < 0.6s thì giữ box đệm để nhìn mượt mà
-                if has_fire_now:
-                    detections_to_draw = current_detections
-                elif now - last_fire_time < 0.6:
-                    detections_to_draw = cached_detections
-                else:
-                    detections_to_draw = []
+            # Xác định detections sẽ vẽ (ưu tiên box hiện tại, giữ đệm khi lửa chớp tắt < 0.6s)
+            if has_fire_now:
+                detections_to_draw = current_detections
+            elif now - last_fire_time < 0.6:
+                detections_to_draw = cached_detections
+            else:
+                detections_to_draw = []
 
-                display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
+            display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
+
+            # 8. Đẩy frame đã vẽ overlay lên web dashboard (encode JPEG, ~5ms)
+            ok, jpg_buf = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                web_state.set_frame(jpg_buf.tobytes())
+            web_state.set_status(is_fire_confirmed, cached_detections, cam_fps, ai_fps)
+
+            if config.SHOW_DISPLAY:
                 action = display.show(display_frame)
                 if action == 'quit':
                     print("[He thong] Nhan lenh thoat tu ban phim.")

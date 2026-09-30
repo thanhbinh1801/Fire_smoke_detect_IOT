@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Fire &amp; Smoke Detector – IoT Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+  <style>
+    /* ── Reset & Base ───────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-base:    #0d0f14;
+      --bg-card:    #151821;
+      --bg-card2:   #1c202c;
+      --border:     rgba(255,255,255,0.07);
+      --accent:     #f97316;
+      --accent-glow:rgba(249,115,22,0.35);
+      --safe:       #22c55e;
+      --safe-glow:  rgba(34,197,94,0.3);
+      --danger:     #ef4444;
+      --danger-glow:rgba(239,68,68,0.4);
+      --text-1:     #f1f5f9;
+      --text-2:     #94a3b8;
+      --text-3:     #64748b;
+      --radius:     16px;
+      --radius-sm:  10px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg-base);
+      color: var(--text-1);
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    .app-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 28px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(21,24,33,0.8);
+      backdrop-filter: blur(12px);
+      position: sticky; top: 0; z-index: 100;
+    }
+
+    .logo-icon {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #f97316, #ef4444);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 18px rgba(249,115,22,0.5);
+      flex-shrink: 0;
+    }
+
+    .header-title { font-size: 17px; font-weight: 700; letter-spacing: 0.01em; }
+    .header-sub   { font-size: 12px; color: var(--text-3); font-weight: 400; }
+
+    .header-time {
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--text-2);
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      grid-template-rows: auto auto;
+      gap: 20px;
+      padding: 24px 28px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    @media (max-width: 900px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── Cards ──────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; font-weight: 600; color: var(--text-2);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+
+    .card-header .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+
+    /* ── Camera stream ───────────────────────────────────────────────────── */
+    .stream-card { grid-row: 1 / 3; }
+
+    .stream-wrap {
+      position: relative;
+      background: #000;
+      aspect-ratio: 4/3;
+      overflow: hidden;
+    }
+
+    #camera-stream {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .stream-badge {
+      position: absolute; top: 12px; left: 12px;
+      background: rgba(0,0,0,0.65);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 11px; font-weight: 600;
+      display: flex; align-items: center; gap: 6px;
+      color: var(--text-1);
+    }
+
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #ef4444;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .stream-fps {
+      position: absolute; bottom: 12px; right: 12px;
+      background: rgba(0,0,0,0.65);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: var(--text-2);
+    }
+
+    /* ── Status panel ────────────────────────────────────────────────────── */
+    .status-panel {
+      padding: 20px 18px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+
+    .status-badge {
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      transition: all 0.4s ease;
+    }
+
+    .status-badge.safe {
+      background: rgba(34,197,94,0.08);
+      border-color: rgba(34,197,94,0.25);
+    }
+
+    .status-badge.danger {
+      background: rgba(239,68,68,0.12);
+      border-color: rgba(239,68,68,0.4);
+      animation: danger-pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes danger-pulse {
+      0%,100% { box-shadow: 0 0 0   0   rgba(239,68,68,0); }
+      50%      { box-shadow: 0 0 18px 4px rgba(239,68,68,0.35); }
+    }
+
+    .status-icon {
+      font-size: 30px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .status-text .label {
+      font-size: 18px; font-weight: 700;
+    }
+
+    .status-text .sub {
+      font-size: 12px; color: var(--text-3);
+      margin-top: 2px;
+    }
+
+    .safe  .status-text .label { color: var(--safe); }
+    .danger .status-text .label { color: var(--danger); }
+
+    /* Confidence bar */
+    .conf-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .conf-label {
+      display: flex; justify-content: space-between;
+      font-size: 12px; color: var(--text-3);
+    }
+    .conf-label span:last-child {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: var(--text-2);
+    }
+
+    .conf-bar {
+      height: 6px; border-radius: 99px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+
+    .conf-fill {
+      height: 100%; border-radius: 99px;
+      background: linear-gradient(90deg, var(--safe), #86efac);
+      transition: width 0.4s ease, background 0.4s ease;
+    }
+
+    .conf-fill.high {
+      background: linear-gradient(90deg, #f97316, #ef4444);
+    }
+
+    /* Stats row */
+    .stats-row {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-box {
+      background: var(--bg-card2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+
+    .stat-box .val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 22px; font-weight: 600;
+      color: var(--text-1);
+    }
+
+    .stat-box .lbl {
+      font-size: 11px; color: var(--text-3);
+      margin-top: 3px;
+    }
+
+    /* ── Alert history ───────────────────────────────────────────────────── */
+    .history-list {
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 10px 14px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+
+    .history-list::-webkit-scrollbar { width: 4px; }
+    .history-list::-webkit-scrollbar-track { background: transparent; }
+    .history-list::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1); border-radius: 99px;
+    }
+
+    .history-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px;
+      background: var(--bg-card2);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: var(--radius-sm);
+      animation: slide-in 0.3s ease;
+    }
+
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .history-time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: var(--text-3);
+      flex-shrink: 0;
+    }
+
+    .history-label {
+      font-size: 13px; font-weight: 600; color: #fca5a5;
+      flex: 1;
+    }
+
+    .history-conf {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      background: rgba(239,68,68,0.15);
+      color: #fca5a5;
+      border-radius: 6px;
+      padding: 2px 8px;
+    }
+
+    .history-empty {
+      text-align: center; padding: 28px 0;
+      color: var(--text-3); font-size: 13px;
+    }
+
+    /* ── Toast Alert popup ───────────────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 28px; right: 28px;
+      background: linear-gradient(135deg, #7f1d1d, #450a0a);
+      border: 1px solid rgba(239,68,68,0.5);
+      border-radius: 14px;
+      padding: 16px 20px;
+      display: flex; align-items: center; gap: 14px;
+      max-width: 340px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 24px rgba(239,68,68,0.3);
+      transform: translateX(120%);
+      transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+      z-index: 999;
+    }
+
+    #toast.show { transform: translateX(0); }
+
+    .toast-icon { font-size: 28px; flex-shrink: 0; }
+
+    .toast-body .toast-title {
+      font-size: 15px; font-weight: 700; color: #fca5a5;
+    }
+
+    .toast-body .toast-sub {
+      font-size: 12px; color: rgba(252,165,165,0.7);
+      margin-top: 3px;
+    }
+
+    /* ── Screen flash overlay ─────────────────────────────────────────────── */
+    #flash-overlay {
+      position: fixed; inset: 0;
+      background: rgba(239,68,68,0.12);
+      pointer-events: none;
+      z-index: 998;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    #flash-overlay.on { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- Flash overlay khi phát hiện lửa -->
+<div id="flash-overlay"></div>
+
+<!-- Toast notification -->
+<div id="toast">
+  <div class="toast-icon">🔥</div>
+  <div class="toast-body">
+    <div class="toast-title" id="toast-title">PHÁT HIỆN LỬA!</div>
+    <div class="toast-sub"  id="toast-sub">Đang xử lý cảnh báo...</div>
+  </div>
+</div>
+
+<!-- Header -->
+<header class="app-header">
+  <div class="logo-icon">🔥</div>
+  <div>
+    <div class="header-title">Fire &amp; Smoke Detector</div>
+    <div class="header-sub">IoT Monitoring Dashboard · Raspberry Pi 4</div>
+  </div>
+  <div class="header-time" id="clock">--:--:--</div>
+</header>
+
+<!-- Main grid -->
+<main class="main-grid">
+
+  <!-- Camera stream card -->
+  <div class="card stream-card">
+    <div class="card-header">
+      <div class="dot"></div>
+      Camera Live Stream
+    </div>
+    <div class="stream-wrap">
+      <img id="camera-stream" src="/stream" alt="Live Camera Feed"/>
+      <div class="stream-badge">
+        <div class="live-dot"></div>
+        LIVE
+      </div>
+      <div class="stream-fps" id="fps-badge">Cam: -- FPS | AI: -- FPS</div>
+    </div>
+  </div>
+
+  <!-- Status card -->
+  <div class="card">
+    <div class="card-header">
+      <div class="dot"></div>
+      Trạng Thái Hệ Thống
+    </div>
+    <div class="status-panel">
+
+      <!-- Status badge -->
+      <div class="status-badge safe" id="status-badge">
+        <div class="status-icon" id="status-icon">✅</div>
+        <div class="status-text">
+          <div class="label" id="status-label">AN TOÀN</div>
+          <div class="sub"  id="status-sub">Không phát hiện lửa/khói</div>
+        </div>
+      </div>
+
+      <!-- Confidence bar -->
+      <div class="conf-wrap">
+        <div class="conf-label">
+          <span>Confidence</span>
+          <span id="conf-pct">0.0%</span>
+        </div>
+        <div class="conf-bar">
+          <div class="conf-fill" id="conf-fill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- FPS stats -->
+      <div class="stats-row">
+        <div class="stat-box">
+          <div class="val" id="stat-cam-fps">--</div>
+          <div class="lbl">Camera FPS</div>
+        </div>
+        <div class="stat-box">
+          <div class="val" id="stat-ai-fps">--</div>
+          <div class="lbl">AI Inference FPS</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Alert history card -->
+  <div class="card">
+    <div class="card-header">
+      <div class="dot"></div>
+      Lịch Sử Cảnh Báo
+    </div>
+    <div class="history-list" id="history-list">
+      <div class="history-empty" id="history-empty">Chưa có cảnh báo nào</div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  // ── Clock ─────────────────────────────────────────────────────────────────
+  const clockEl = document.getElementById('clock');
+  function updateClock() {
+    const now = new Date();
+    clockEl.textContent = now.toLocaleTimeString('vi-VN', {hour12: false});
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // ── Status polling (mỗi 1 giây) ──────────────────────────────────────────
+  const statusBadge = document.getElementById('status-badge');
+  const statusIcon  = document.getElementById('status-icon');
+  const statusLabel = document.getElementById('status-label');
+  const statusSub   = document.getElementById('status-sub');
+  const confFill    = document.getElementById('conf-fill');
+  const confPct     = document.getElementById('conf-pct');
+  const fpsBadge    = document.getElementById('fps-badge');
+  const statCamFps  = document.getElementById('stat-cam-fps');
+  const statAiFps   = document.getElementById('stat-ai-fps');
+
+  async function pollStatus() {
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+
+      const isFire = data.is_fire;
+      const conf   = data.confidence || 0;
+      const pct    = (conf * 100).toFixed(1);
+      const label  = data.label || '';
+
+      // Update status badge
+      statusBadge.className = 'status-badge ' + (isFire ? 'danger' : 'safe');
+      statusIcon.textContent  = isFire ? '🔥' : '✅';
+      statusLabel.textContent = isFire ? ('PHÁT HIỆN ' + label.toUpperCase()) : 'AN TOÀN';
+      statusSub.textContent   = isFire
+        ? `Confidence: ${pct}% · Đang cảnh báo`
+        : 'Không phát hiện lửa/khói';
+
+      // Confidence bar
+      confFill.style.width = pct + '%';
+      confFill.className   = 'conf-fill' + (conf > 0.5 ? ' high' : '');
+      confPct.textContent  = pct + '%';
+
+      // FPS
+      const camFps = data.cam_fps || 0;
+      const aiFps  = data.ai_fps  || 0;
+      fpsBadge.textContent    = `Cam: ${camFps.toFixed(1)} FPS | AI: ${aiFps.toFixed(1)} FPS`;
+      statCamFps.textContent  = camFps.toFixed(1);
+      statAiFps.textContent   = aiFps.toFixed(1);
+
+    } catch(e) { /* ignore */ }
+  }
+
+  setInterval(pollStatus, 1000);
+  pollStatus();
+
+  // ── History polling (mỗi 3 giây) ─────────────────────────────────────────
+  const historyList  = document.getElementById('history-list');
+  const historyEmpty = document.getElementById('history-empty');
+
+  async function pollHistory() {
+    try {
+      const res  = await fetch('/api/history');
+      const data = await res.json();
+
+      if (!data.length) {
+        historyEmpty.style.display = 'block';
+        return;
+      }
+      historyEmpty.style.display = 'none';
+
+      // Render items (chỉ re-render khi có thay đổi)
+      const currentCount = historyList.querySelectorAll('.history-item').length;
+      if (currentCount === data.length) return;
+
+      historyList.innerHTML = '';
+      data.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'history-item';
+        div.innerHTML = `
+          <span class="history-time">${item.time_str}</span>
+          <span class="history-label">🔥 ${item.label}</span>
+          <span class="history-conf">${(item.confidence * 100).toFixed(0)}%</span>
+        `;
+        historyList.appendChild(div);
+      });
+    } catch(e) { /* ignore */ }
+  }
+
+  setInterval(pollHistory, 3000);
+  pollHistory();
+
+  // ── SSE: Realtime fire alerts ─────────────────────────────────────────────
+  const toast       = document.getElementById('toast');
+  const toastTitle  = document.getElementById('toast-title');
+  const toastSub    = document.getElementById('toast-sub');
+  const flashOverlay = document.getElementById('flash-overlay');
+  let toastTimer = null;
+
+  function showToast(title, sub) {
+    toastTitle.textContent = title;
+    toastSub.textContent   = sub;
+    toast.classList.add('show');
+    flashOverlay.classList.add('on');
+
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+      flashOverlay.classList.remove('on');
+    }, 5000);
+  }
+
+  function connectSSE() {
+    const evtSource = new EventSource('/events');
+
+    evtSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.is_fire) {
+          const label = data.label || 'FIRE';
+          const conf  = ((data.confidence || 0) * 100).toFixed(0);
+          showToast(
+            `🔥 PHÁT HIỆN ${label.toUpperCase()}!`,
+            `Độ tin cậy: ${conf}% · ${data.time_str}`
+          );
+        }
+      } catch(e) { /* ignore */ }
+    };
+
+    evtSource.onerror = () => {
+      evtSource.close();
+      // Thử kết nối lại sau 3 giây
+      setTimeout(connectSSE, 3000);
+    };
+  }
+
+  connectSSE();
+</script>
+</body>
+</html>
