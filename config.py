@@ -25,11 +25,22 @@ PLATFORM = "pi"
 WEBCAM_INDEX = 0
 
 # --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
-# Bật lấy nét tự động liên tục (Continuous AF: AfMode=2) giúp hình ảnh luôn sắc nét ở mọi cự ly
-CAMERA_AUTOFOCUS = True
+# Bật lấy nét tự động liên tục (Continuous AF: AfMode=2)
+# LƯU Ý: IMX519 trên Pi OS cần IPA algorithm riêng.
+# Nếu log báo "Could not set AF_MODE - no AF algorithm" thì đặt False
+# và dùng CAMERA_LENS_POSITION để lấy nét thủ công.
+CAMERA_AUTOFOCUS = False
 
-# Vị trí tiêu cự thủ công dự phòng khi tắt AF (dioptres, 0.0=vô cực, 2.0=50cm)
-CAMERA_LENS_POSITION = 1.0
+# Vị trí tiêu cự thủ công dự phòng khi tắt AF (dioptres)
+# Công thức: LensPosition = 1 / khoảng_cách_mét
+#   0.0 = vô cực (xa > 3m)
+#   0.5 = ~2m
+#   1.0 = ~1m
+#   2.0 = ~50cm  ← thử nếu vật ở ~50cm
+#   2.5 = ~40cm  ← thử nếu vật ở ~40cm (đang dùng)
+#   4.0 = ~25cm
+#   8.0 = ~12cm (rất gần)
+CAMERA_LENS_POSITION = 2.5
 
 # Bù trừ phơi sáng (Exposure Value) cho IMX519 (-0.5 giúp giảm chói lóa từ ngọn lửa/màn hình điện thoại)
 CAMERA_EXPOSURE_COMP = -0.5
