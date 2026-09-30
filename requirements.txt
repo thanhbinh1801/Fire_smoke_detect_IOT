@@ -1,15 +1,13 @@
 # --- CÁC THƯ VIỆN AI & XỬ LÝ ẢNH (CHẠY TRÊN RASPBERRY PI VÀ LAPTOP) ---
 # Sử dụng ONNX Runtime thay cho Ultralytics/PyTorch để tiết kiệm RAM và dung lượng
 onnxruntime>=1.15.0
-# Dùng headless để tránh lỗi Qt trên Pi không có màn hình (web dashboard thay thế)
-opencv-python-headless>=4.8.0
+# OpenCV GUI được cài bằng apt (python3-opencv) để tương thích Raspberry Pi OS/Picamera2
 numpy>=1.23.0
-flask>=3.0.0
 
 # --- LƯU Ý PHẦN CỨNG TRÊN RASPBERRY PI OS ---
 # Hai thư viện picamera2 và gpiozero được quản lý bởi hệ điều hành Pi OS,
 # cài đặt qua lệnh hệ thống (không cài qua pip để tránh xung đột driver):
 #   sudo apt update
-#   sudo apt install -y python3-picamera2 python3-gpiozero
+#   sudo apt install -y python3-picamera2 python3-gpiozero python3-opencv libgl1 libglib2.0-0
 # Sau đó tạo venv bằng lệnh: python3 -m venv venv --system-site-packages
 # Kích hoạt venv và cài đặt: pip install -r requirements.txt

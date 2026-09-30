@@ -95,6 +95,13 @@ class FireCamera:
         while self.frame is None and (time.time() - start_wait < 5.0):
             time.sleep(0.05)
 
+        if self.frame is None:
+            self.close()
+            raise RuntimeError(
+                "Camera khong tra ve hinh anh sau 5 giay. "
+                "Hay dong ung dung dang dung webcam va kiem tra WEBCAM_INDEX trong config.py."
+            )
+
     def trigger_autofocus(self):
         """Kích hoạt chu kỳ lấy nét tự động lại nếu cần"""
         if self.platform == "pi" and hasattr(self, "picam2"):

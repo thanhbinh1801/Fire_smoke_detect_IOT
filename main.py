@@ -12,9 +12,10 @@ Tối ưu hóa toàn diện cho Raspberry Pi 4 + Arducam IMX519:
 import os
 import sys
 
-# Dập tắt cảnh báo Wayland & QFontDatabase của OpenCV Qt trên Linux / Raspberry Pi
-os.environ["QT_LOGGING_RULES"] = "*=false;*.debug=false;qt.qpa.*=false"
-os.environ["QT_QPA_PLATFORM"] = "xcb"
+# Giảm log Qt trên Linux. Không ép backend xcb để OpenCV tự chọn backend
+# phù hợp với phiên desktop X11/Wayland đang chạy trên Raspberry Pi.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_LOGGING_RULES", "*=false;*.debug=false;qt.qpa.*=false")
 
 import time
 import cv2
@@ -31,8 +32,6 @@ from camera import FireCamera
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
 import display
-import web_state
-import web_server
 
 def main():
     print("=" * 60)
@@ -46,10 +45,7 @@ def main():
     async_detector = AsyncFireDetector(raw_detector)
     alert = AlertSystem()
 
-    # 2. Khởi động web server dashboard (daemon thread)
-    web_server.start(port=getattr(config, "WEB_PORT", 5000))
-
-    # 3. Tạo thư mục lưu snapshot nếu được bật
+    # 2. Tạo thư mục lưu snapshot nếu được bật
     if config.SAVE_SNAPSHOT:
         os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
 
@@ -127,12 +123,7 @@ def main():
 
             display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
 
-            # 8. Đẩy frame đã vẽ overlay lên web dashboard (encode JPEG, ~5ms)
-            ok, jpg_buf = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                web_state.set_frame(jpg_buf.tobytes())
-            web_state.set_status(is_fire_confirmed, cached_detections, cam_fps, ai_fps)
-
+            # 8. Hiển thị trực tiếp bằng cửa sổ OpenCV trên máy local.
             if config.SHOW_DISPLAY:
                 action = display.show(display_frame)
                 if action == 'quit':
@@ -164,4 +155,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

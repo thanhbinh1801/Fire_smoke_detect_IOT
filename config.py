@@ -18,7 +18,6 @@ FRAME_HEIGHT = 480
 # Nền tảng đang chạy: 
 # "laptop" (webcam qua OpenCV, buzzer & led giả lập qua console)
 # "pi" (camera CSI qua Picamera2, passive buzzer & đèn LED thật qua GPIO)
-# PLATFORM = "laptop"
 PLATFORM = "pi"
 
 # Webcam index khi chạy test trên laptop (0 = webcam mặc định)
@@ -85,6 +84,6 @@ SNAPSHOT_DIR = "data/snapshots"
 
 # --- HIỂN THỊ MÀN HÌNH ---
 # Hiện cửa sổ video (cv2.imshow). Đặt True để hiện màn hình camera, đặt False nếu chạy headless (không màn hình)
-# Trên Raspberry Pi: đặt False vì đã có web dashboard tại http://<Pi_IP>:5000
-SHOW_DISPLAY = False
+# Hiển thị trực tiếp trên màn hình Raspberry Pi, không dùng web server/Flask.
+SHOW_DISPLAY = True
 WINDOW_NAME = "Fire & Smoke Detector - IoT System"
