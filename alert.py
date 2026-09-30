@@ -7,6 +7,7 @@ Module điều khiển còi báo động (Buzzer) và Đèn cảnh báo (LED).
 """
 
 import time
+import math
 import threading
 import config
 
@@ -18,6 +19,9 @@ class AlertSystem:
         self.is_buzzing = False
         self.is_led_on = False
         self._lock = threading.Lock()
+        # C᳝ liên tục cho còi sóng sin
+        self._should_buzz = False
+        self._buzz_thread = None
 
         if self.platform == "pi":
             # 1. Khởi tạo Còi Buzzer
@@ -73,26 +77,32 @@ class AlertSystem:
                 self.led.off()
             print("[LED] >>> TAT DEN CANH BAO LUA <<<")
 
-    def _buzz_worker(self):
-        """Luồng chạy ngầm điều khiển tiếng còi bíp bíp"""
+    def _buzz_sine_worker(self):
+        """
+        Luồng chạy ngầm: phát sóng sin liên tục (quét tần số 1000–3000 Hz theo hàm sin)
+        - Tần số của âm thanh thay đổi mượt mà theo hàm sin 0.5 Hz
+        - Chạy cho đến khi _should_buzz = False thì dừng ngay
+        """
+        t = 0.0
+        dt = 0.02  # cập nhật mỗi 20ms
+        f_center = 2000  # tần số trung tâm Hz
+        f_range  = 1000  # biên độ quét Hz
+        sweep_hz = 0.5   # tốc độ quét lên xuống (0.5 Hz = 2 giây/chu kỳ)
+
+        while self._should_buzz:
+            freq = int(f_center + f_range * math.sin(2 * math.pi * sweep_hz * t))
+            if self.platform == "pi" and self.mode == "pwm":
+                try:
+                    self.buzzer.frequency = freq
+                    self.buzzer.value = 0.5
+                except Exception:
+                    pass
+            t += dt
+            time.sleep(dt)
+
+        self._sound_off()
         with self._lock:
-            self.is_buzzing = True
-
-        try:
-            end_time = time.time() + config.ALERT_DURATION
-            if self.platform == "laptop":
-                print(f"[ALERT] >>> CANH BAO! Coi gia lap dang keu trong {config.ALERT_DURATION}s <<<")
-
-            while time.time() < end_time:
-                self._sound_on()
-                time.sleep(0.2)
-                self._sound_off()
-                time.sleep(0.1)
-
-        finally:
-            self._sound_off()
-            with self._lock:
-                self.is_buzzing = False
+            self.is_buzzing = False
 
     def set_fire_led(self, has_fire: bool):
         """
@@ -105,10 +115,30 @@ class AlertSystem:
         else:
             self._led_off()
 
+    def set_buzzer(self, has_fire: bool):
+        """
+        Điều khiển còi liên tục theo trạng thái nhận diện:
+        - has_fire=True  : bắt đầu hú sóng sin (nếu chưa chạy)
+        - has_fire=False : dừng ngay lập tức
+        """
+        if has_fire:
+            with self._lock:
+                if self.is_buzzing:
+                    return  # đang chạy rồi, không spawn thêm
+                self._should_buzz = True
+                self.is_buzzing = True
+            if self.platform == "laptop":
+                print("[ALERT] >>> COI GIA LAP: DANG HU SONG SIN <<<")
+            self._buzz_thread = threading.Thread(
+                target=self._buzz_sine_worker, daemon=True, name="BuzzSine"
+            )
+            self._buzz_thread.start()
+        else:
+            self._should_buzz = False  # worker tự dừng sau 1 vòng
+
     def trigger(self):
         """
-        Kích hoạt còi báo động (Buzzer).
-        Chạy ngầm trong non-blocking thread, có cooldown.
+        [Legacy] Kích hoạt còi (giữ để tương thích). Dùng set_buzzer() cho chế độ mới.
         """
         now = time.time()
 

@@ -78,7 +78,7 @@ def draw_overlay(frame, detections, fps=None, ai_fps=None):
         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA
     )
 
-    help_str = "[c]: Mau | [f]: AF | [ / ]: Tieu cu | [q]: Thoat"
+    help_str = "[q] / ESC: Thoat"
     cv2.putText(
         render_frame, help_str, (w - 380, h - 9),
         cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1, cv2.LINE_AA

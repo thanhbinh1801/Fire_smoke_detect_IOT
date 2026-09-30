@@ -96,12 +96,10 @@ def main():
             # 4. Điều khiển đèn LED GPIO 27 (Sáng ổn định tuyệt đối, không nhấp nháy chập chờn)
             alert.set_fire_led(is_fire_confirmed)
 
-            # 5. Kích hoạt còi báo động khi ngọn lửa đã được xác thực
+            # 5. Điều khiển còi sóng sin liên tục theo trạng thái lửa
+            alert.set_buzzer(is_fire_confirmed)
+
             if is_fire_confirmed:
-                confs = [round(d["conf"], 2) for d in current_detections] if current_detections else [0.0]
-                if has_fire_now:
-                    print(f"[CANH BAO] XAC NHAN CO LUA! Confidence: {confs}")
-                alert.trigger()
 
                 if config.SAVE_SNAPSHOT and has_fire_now:
                     timestamp_str = time.strftime("%Y%m%d_%H%M%S")
