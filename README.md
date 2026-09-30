@@ -18,7 +18,7 @@ Mở Terminal ngay trên Raspberry Pi:
 ```bash
 cd ~/nhan_dien_chay
 sudo apt update
-sudo apt install -y python3-picamera2 python3-gpiozero python3-opencv python3-venv libgl1 libglib2.0-0
+sudo apt install -y python3-picamera2 python3-gpiozero python3-opencv python3-venv fonts-dejavu-core libgl1 libglib2.0-0
 python3 -m venv venv --system-site-packages
 source venv/bin/activate
 python -m pip install --upgrade pip

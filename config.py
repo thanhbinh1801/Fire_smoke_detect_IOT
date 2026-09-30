@@ -86,4 +86,4 @@ SNAPSHOT_DIR = "data/snapshots"
 # Hiện cửa sổ video (cv2.imshow). Đặt True để hiện màn hình camera, đặt False nếu chạy headless (không màn hình)
 # Hiển thị trực tiếp trên màn hình Raspberry Pi, không dùng web server/Flask.
 SHOW_DISPLAY = True
-WINDOW_NAME = "Fire & Smoke Detector - IoT System"
+WINDOW_NAME = "Hệ thống nhận diện lửa - IoT"

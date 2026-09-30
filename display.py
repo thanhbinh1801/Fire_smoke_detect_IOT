@@ -10,8 +10,30 @@ Module hiển thị hình ảnh trực tiếp lên màn hình (qua OpenCV GUI).
   + 'q' hoặc ESC: Thoát
 """
 
+import os
+from functools import lru_cache
+
 import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 import config
+
+
+@lru_cache(maxsize=8)
+def _font(size, bold=False):
+    """Nạp font Unicode có hỗ trợ đầy đủ tiếng Việt trên Raspberry Pi."""
+    filename = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    candidates = [
+        os.path.join("/usr/share/fonts/truetype/dejavu", filename),
+        os.path.join("C:/Windows/Fonts", "arialbd.ttf" if bold else "arial.ttf"),
+        filename,
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 def draw_overlay(frame, detections, fps=None, ai_fps=None):
     """
@@ -29,41 +51,17 @@ def draw_overlay(frame, detections, fps=None, ai_fps=None):
 
         # 2. Thanh banner cảnh báo ở trên cùng
         cv2.rectangle(render_frame, (0, 0), (w, 50), (0, 0, 200), -1)
-        cv2.putText(
-            render_frame, "!!! CANH BAO: PHAT HIEN LUA !!!", (20, 35),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA
-        )
-
         # 3. Vẽ bounding box từng đối tượng lửa
         for d in detections:
             x1, y1, x2, y2 = d["box"]
-            label = d["label"]
-            conf = d["conf"]
 
             box_color = (0, 0, 255)  # Màu đỏ cho lửa
 
             # Bounding box
             cv2.rectangle(render_frame, (x1, y1), (x2, y2), box_color, 2)
-
-            # Tag nhãn phía trên box
-            tag_text = f"{label} {conf:.2f}"
-            (text_w, text_h), baseline = cv2.getTextSize(
-                tag_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-            )
-            tag_y1 = max(y1 - text_h - 8, 55)
-            tag_y2 = tag_y1 + text_h + 6
-            cv2.rectangle(render_frame, (x1, tag_y1), (x1 + text_w + 6, tag_y2), box_color, -1)
-            cv2.putText(
-                render_frame, tag_text, (x1 + 3, tag_y2 - 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA
-            )
     else:
         # Trạng thái an toàn bình thường
         cv2.rectangle(render_frame, (0, 0), (w, 40), (40, 40, 40), -1)
-        cv2.putText(
-            render_frame, "TRANG THAI: AN TOAN", (15, 28),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 230, 0), 2, cv2.LINE_AA
-        )
 
     # Thanh trạng thái dưới cùng (FPS + Hướng dẫn phím)
     cv2.rectangle(render_frame, (0, h - 30), (w, h), (20, 20, 20), -1)
@@ -73,10 +71,41 @@ def draw_overlay(frame, detections, fps=None, ai_fps=None):
         fps_str = f"FPS: {fps:.1f}"
     else:
         fps_str = "FPS: --"
-    cv2.putText(
-        render_frame, fps_str, (15, h - 9),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA
+
+    # OpenCV Hershey không hỗ trợ Unicode. Dùng Pillow + DejaVu Sans để chữ
+    # tiếng Việt có dấu hiển thị đúng trên Raspberry Pi.
+    pil_image = Image.fromarray(cv2.cvtColor(render_frame, cv2.COLOR_BGR2RGB))
+    painter = ImageDraw.Draw(pil_image)
+
+    if detections:
+        painter.text(
+            (18, 10), "!!! CẢNH BÁO: PHÁT HIỆN LỬA !!!",
+            font=_font(25, bold=True), fill=(255, 255, 255)
+        )
+        tag_font = _font(17, bold=True)
+        for d in detections:
+            x1, y1, _, _ = d["box"]
+            tag_text = f"LỬA {d['conf']:.2f}"
+            left, top, right, bottom = painter.textbbox((0, 0), tag_text, font=tag_font)
+            text_w, text_h = right - left, bottom - top
+            tag_y = max(y1 - text_h - 10, 55)
+            painter.rectangle(
+                (x1, tag_y, x1 + text_w + 8, tag_y + text_h + 8),
+                fill=(220, 0, 0)
+            )
+            painter.text((x1 + 4, tag_y + 2), tag_text, font=tag_font, fill=(255, 255, 255))
+    else:
+        painter.text(
+            (15, 7), "TRẠNG THÁI: AN TOÀN",
+            font=_font(20, bold=True), fill=(0, 230, 0)
+        )
+
+    painter.text(
+        (15, h - 25), fps_str,
+        font=_font(16, bold=True), fill=(255, 255, 0)
     )
+
+    render_frame = cv2.cvtColor(np.asarray(pil_image), cv2.COLOR_RGB2BGR)
 
     return render_frame
 

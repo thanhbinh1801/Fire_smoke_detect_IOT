@@ -3,6 +3,7 @@
 onnxruntime>=1.15.0
 # OpenCV GUI được cài bằng apt (python3-opencv) để tương thích Raspberry Pi OS/Picamera2
 numpy>=1.23.0
+Pillow>=10.0.0
 
 # --- LƯU Ý PHẦN CỨNG TRÊN RASPBERRY PI OS ---
 # Hai thư viện picamera2 và gpiozero được quản lý bởi hệ điều hành Pi OS,

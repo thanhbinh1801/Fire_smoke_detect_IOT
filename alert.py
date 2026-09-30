@@ -36,14 +36,14 @@ class AlertSystem:
                 from gpiozero import Buzzer
                 self.buzzer = Buzzer(config.BUZZER_PIN)
                 self.mode = "active"
-            print(f"[Alert] Da khoi tao Buzzer ({self.mode}) tren GPIO BCM {config.BUZZER_PIN}")
+            print(f"[Cảnh báo] Đã khởi tạo còi ({self.mode}) trên GPIO BCM {config.BUZZER_PIN}")
 
             # 2. Khởi tạo Đèn LED báo cháy (GPIO 27)
             from gpiozero import LED
             self.led = LED(getattr(config, "LED_PIN", 27))
-            print(f"[Alert] Da khoi tao Den LED tren GPIO BCM {getattr(config, 'LED_PIN', 27)}")
+            print(f"[Cảnh báo] Đã khởi tạo đèn LED trên GPIO BCM {getattr(config, 'LED_PIN', 27)}")
         else:
-            print("[Alert] Dang chay che do laptop - coi & den gia lap qua console.")
+            print("[Cảnh báo] Đang chạy chế độ laptop - còi và đèn giả lập qua console.")
 
     def _sound_on(self):
         """Bật còi"""
@@ -67,7 +67,7 @@ class AlertSystem:
             self.is_led_on = True
             if self.platform == "pi":
                 self.led.on()
-            print(f"[LED] >>> BAT DEN CANH BAO LUA (GPIO {getattr(config, 'LED_PIN', 27)}) <<<")
+            print(f"[LED] >>> BẬT ĐÈN CẢNH BÁO LỬA (GPIO {getattr(config, 'LED_PIN', 27)}) <<<")
 
     def _led_off(self):
         """Tắt đèn cảnh báo lửa"""
@@ -75,30 +75,48 @@ class AlertSystem:
             self.is_led_on = False
             if self.platform == "pi":
                 self.led.off()
-            print("[LED] >>> TAT DEN CANH BAO LUA <<<")
+            print("[LED] >>> TẮT ĐÈN CẢNH BÁO LỬA <<<")
 
     def _buzz_sine_worker(self):
         """
-        Luồng chạy ngầm: phát sóng sin liên tục (quét tần số 1000–3000 Hz theo hàm sin)
-        - Tần số của âm thanh thay đổi mượt mà theo hàm sin 0.5 Hz
-        - Chạy cho đến khi _should_buzz = False thì dừng ngay
+        Còi hú mềm theo chu kỳ:
+        - Quét êm 1400 -> 2400 -> 1400 Hz trong 0.8 giây.
+        - Nghỉ 0.2 giây giữa hai nhịp để cảnh báo rõ nhưng không quá chói.
+        - Fade âm lượng 80 ms ở đầu/cuối nhịp để tránh tiếng tạch.
         """
-        t = 0.0
-        dt = 0.02  # cập nhật mỗi 20ms
-        f_center = 2000  # tần số trung tâm Hz
-        f_range  = 1000  # biên độ quét Hz
-        sweep_hz = 0.5   # tốc độ quét lên xuống (0.5 Hz = 2 giây/chu kỳ)
+        update_interval = 0.02
+        tone_duration = 0.8
+        pause_duration = 0.2
+        cycle_duration = tone_duration + pause_duration
+        fade_duration = 0.08
+        min_frequency = 1400
+        max_frequency = 2400
+        started_at = time.monotonic()
 
         while self._should_buzz:
-            freq = int(f_center + f_range * math.sin(2 * math.pi * sweep_hz * t))
-            if self.platform == "pi" and self.mode == "pwm":
-                try:
-                    self.buzzer.frequency = freq
-                    self.buzzer.value = 0.5
-                except Exception:
-                    pass
-            t += dt
-            time.sleep(dt)
+            position = (time.monotonic() - started_at) % cycle_duration
+
+            if position < tone_duration:
+                phase = position / tone_duration
+                frequency = min_frequency + (max_frequency - min_frequency) * (
+                    0.5 - 0.5 * math.cos(2 * math.pi * phase)
+                )
+                fade_in = min(1.0, position / fade_duration)
+                fade_out = min(1.0, (tone_duration - position) / fade_duration)
+                volume = 0.5 * min(fade_in, fade_out)
+
+                if self.platform == "pi" and self.mode == "pwm":
+                    try:
+                        self.buzzer.frequency = int(frequency)
+                        self.buzzer.value = max(0.0, volume)
+                    except Exception:
+                        pass
+                elif self.platform == "pi":
+                    self.buzzer.on()
+            else:
+                self._sound_off()
+
+            time.sleep(update_interval)
 
         self._sound_off()
         with self._lock:
@@ -128,7 +146,7 @@ class AlertSystem:
                 self._should_buzz = True
                 self.is_buzzing = True
             if self.platform == "laptop":
-                print("[ALERT] >>> COI GIA LAP: DANG HU SONG SIN <<<")
+                print("[CẢNH BÁO] >>> CÒI GIẢ LẬP: ĐANG HÚ CẢNH BÁO <<<")
             self._buzz_thread = threading.Thread(
                 target=self._buzz_sine_worker, daemon=True, name="BuzzSine"
             )
