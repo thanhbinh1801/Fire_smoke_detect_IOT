@@ -40,8 +40,16 @@ class FireSmokeDetector:
         self.output_name = self.session.get_outputs()[0].name
 
         self.input_shape = self.input_info.shape
-        self.input_h = self.input_shape[2] if len(self.input_shape) >= 4 else 480
-        self.input_w = self.input_shape[3] if len(self.input_shape) >= 4 else 640
+        self.input_h = (
+            self.input_shape[2]
+            if len(self.input_shape) >= 4 and isinstance(self.input_shape[2], int)
+            else config.FRAME_HEIGHT
+        )
+        self.input_w = (
+            self.input_shape[3]
+            if len(self.input_shape) >= 4 and isinstance(self.input_shape[3], int)
+            else config.FRAME_WIDTH
+        )
 
         self.names = self._load_class_names()
         self.conf_threshold = getattr(config, "CONFIDENCE_THRESHOLD", 0.35)
@@ -53,14 +61,24 @@ class FireSmokeDetector:
     def _load_class_names(self):
         """Đọc danh sách nhãn lớp từ metadata của file ONNX nếu có"""
         default_names = {0: "fire", 1: "smoke"}
+        metadata = self.session.get_modelmeta().custom_metadata_map
+        if "names" not in metadata:
+            print("[Detector] Model không có metadata names; dùng nhãn mặc định fire/smoke.")
+            return default_names
         try:
-            meta = self.session.get_modelmeta().custom_metadata_map
-            if "names" in meta:
-                parsed = ast.literal_eval(meta["names"])
-                return {int(k): v for k, v in parsed.items()}
-        except Exception:
-            pass
-        return default_names
+            parsed = ast.literal_eval(metadata["names"])
+            if isinstance(parsed, dict):
+                names = {int(key): str(value) for key, value in parsed.items()}
+            elif isinstance(parsed, (list, tuple)):
+                names = {index: str(value) for index, value in enumerate(parsed)}
+            else:
+                raise ValueError("metadata names phải là dict hoặc list")
+            if names:
+                return names
+            raise ValueError("metadata names rỗng")
+        except (SyntaxError, TypeError, ValueError) as error:
+            print(f"[Detector] Metadata names không hợp lệ ({error}); dùng nhãn mặc định fire/smoke.")
+            return default_names
 
     def detect(self, frame):
         """
@@ -73,22 +91,36 @@ class FireSmokeDetector:
         """
         orig_h, orig_w = frame.shape[:2]
 
-        # 1. Resize về kích thước input của model nếu cần
-        if orig_h != self.input_h or orig_w != self.input_w:
-            resized = cv2.resize(frame, (self.input_w, self.input_h))
-        else:
-            resized = frame
+        # Letterbox giữ tỷ lệ ảnh, tránh kéo méo đối tượng khi model dùng input vuông.
+        scale = min(self.input_w / orig_w, self.input_h / orig_h)
+        resized_w = max(1, int(round(orig_w * scale)))
+        resized_h = max(1, int(round(orig_h * scale)))
+        resized = cv2.resize(frame, (resized_w, resized_h))
+        pad_x = (self.input_w - resized_w) // 2
+        pad_y = (self.input_h - resized_h) // 2
+        model_frame = np.full((self.input_h, self.input_w, 3), 114, dtype=np.uint8)
+        model_frame[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
 
         # 2. Chuẩn hóa kênh màu: Chuyển BGR sang RGB cho mạng nơ-ron YOLOv8
-        rgb_tensor = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        rgb_tensor = cv2.cvtColor(model_frame, cv2.COLOR_BGR2RGB)
 
         tensor = rgb_tensor.transpose((2, 0, 1)).astype(np.float32) / 255.0
         blob = np.expand_dims(tensor, axis=0)
 
         # 3. Chạy Inference qua ONNX Runtime
         outputs = self.session.run([self.output_name], {self.input_name: blob})
-        preds = outputs[0][0]  # shape: (6, num_anchors)
-        preds = np.transpose(preds)  # shape: (num_anchors, 6)
+        preds = np.asarray(outputs[0])
+        if preds.ndim == 3:
+            preds = preds[0]
+        if preds.ndim != 2:
+            raise ValueError(f"Output ONNX không hợp lệ: shape={preds.shape}")
+        feature_count = 4 + len(self.names)
+        if preds.shape[0] == feature_count and preds.shape[1] != feature_count:
+            preds = preds.transpose()
+        elif preds.shape[1] != feature_count and preds.shape[0] < preds.shape[1]:
+            preds = preds.transpose()
+        if preds.shape[1] < 5:
+            raise ValueError(f"Output ONNX thiếu dữ liệu class/box: shape={preds.shape}")
 
         # 4. Trích xuất xác suất các lớp
         scores_matrix = preds[:, 4:]  # (num_anchors, num_classes)
@@ -109,47 +141,45 @@ class FireSmokeDetector:
         w = filtered_preds[:, 2]
         h = filtered_preds[:, 3]
 
-        scale_x = orig_w / float(self.input_w)
-        scale_y = orig_h / float(self.input_h)
-
-        x1 = ((cx - w / 2.0) * scale_x)
-        y1 = ((cy - h / 2.0) * scale_y)
-        w_scaled = (w * scale_x)
-        h_scaled = (h * scale_y)
+        x1 = ((cx - w / 2.0 - pad_x) / scale)
+        y1 = ((cy - h / 2.0 - pad_y) / scale)
+        w_scaled = w / scale
+        h_scaled = h / scale
 
         boxes_for_nms = np.column_stack([x1, y1, w_scaled, h_scaled]).astype(int).tolist()
         conf_list = filtered_conf.astype(float).tolist()
         cls_list = filtered_cls.astype(int).tolist()
-
-        indices = cv2.dnn.NMSBoxes(
-            boxes_for_nms,
-            conf_list,
-            self.conf_threshold,
-            self.iou_threshold
-        )
-
         detections = []
-        if len(indices) > 0:
-            for idx in np.array(indices).flatten():
-                cls_id = cls_list[idx]
+        for cls_id in set(cls_list):
+            class_indices = [i for i, value in enumerate(cls_list) if value == cls_id]
+            indices = cv2.dnn.NMSBoxes(
+                [boxes_for_nms[i] for i in class_indices],
+                [conf_list[i] for i in class_indices],
+                self.conf_threshold,
+                self.iou_threshold,
+            )
+            for class_index in np.asarray(indices).flatten():
+                idx = class_indices[int(class_index)]
                 label = self.names.get(cls_id, f"class_{cls_id}")
                 conf = conf_list[idx]
+                normalized_label = str(label).strip().lower()
+                is_fire = "fire" in normalized_label or "flame" in normalized_label
+                is_smoke = "smoke" in normalized_label
+                if not is_fire and not is_smoke:
+                    continue
+                bx, by, bw, bh = boxes_for_nms[idx]
+                xmin = max(0, min(orig_w - 1, bx))
+                ymin = max(0, min(orig_h - 1, by))
+                xmax = max(0, min(orig_w - 1, bx + bw))
+                ymax = max(0, min(orig_h - 1, by + bh))
 
-                # CHỈ LẤY LỬA ('fire'), bỏ qua khói
-                if "fire" in label.lower():
-                    bx, by, bw, bh = boxes_for_nms[idx]
-                    xmin = max(0, min(orig_w - 1, bx))
-                    ymin = max(0, min(orig_h - 1, by))
-                    xmax = max(0, min(orig_w - 1, bx + bw))
-                    ymax = max(0, min(orig_h - 1, by + bh))
+                detections.append({
+                    "label": "fire" if is_fire else "smoke",
+                    "conf": float(conf),
+                    "box": (int(xmin), int(ymin), int(xmax), int(ymax))
+                })
 
-                    detections.append({
-                        "label": "fire",
-                        "conf": float(conf),
-                        "box": (int(xmin), int(ymin), int(xmax), int(ymax))
-                    })
-
-        return detections
+        return sorted(detections, key=lambda detection: detection["conf"], reverse=True)
 
 
 class AsyncFireDetector:
@@ -167,6 +197,8 @@ class AsyncFireDetector:
         self.running = True
         self.has_new_frame = threading.Event()
         self.ai_fps = 0.0
+        self.last_update_time = 0.0
+        self.last_error = None
 
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
@@ -200,7 +232,10 @@ class AsyncFireDetector:
                 with self.lock:
                     self.latest_detections = dets
                     self.last_update_time = time.time()
+                    self.last_error = None
             except Exception as e:
+                with self.lock:
+                    self.last_error = str(e)
                 print(f"[AsyncDetector] Loi suy luan AI: {e}")
 
             count += 1
@@ -215,10 +250,19 @@ class AsyncFireDetector:
         with self.lock:
             return list(self.latest_detections), self.ai_fps
 
+    def get_result(self):
+        """Lấy kết quả, FPS, thời điểm suy luận gần nhất và lỗi nếu có."""
+        with self.lock:
+            return (
+                list(self.latest_detections),
+                self.ai_fps,
+                self.last_update_time,
+                self.last_error,
+            )
+
     def stop(self):
         """Dừng luồng AI an toàn"""
         self.running = False
         self.has_new_frame.set()
         if hasattr(self, "thread") and self.thread.is_alive():
             self.thread.join(timeout=1.0)
-

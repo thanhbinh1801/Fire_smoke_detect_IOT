@@ -45,17 +45,19 @@ def draw_overlay(frame, detections, fps=None, ai_fps=None):
     # Frame từ camera đã ở dạng BGR chuẩn hiển thị cho OpenCV imshow
     render_frame = frame.copy()
 
+    has_fire = any(d.get("label") == "fire" for d in detections)
     if detections:
         # 1. Viền đỏ cảnh báo toàn khung hình để nhận diện từ xa
-        cv2.rectangle(render_frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 6)
+        alert_color = (0, 0, 255) if has_fire else (0, 165, 255)
+        cv2.rectangle(render_frame, (0, 0), (w - 1, h - 1), alert_color, 6)
 
         # 2. Thanh banner cảnh báo ở trên cùng
-        cv2.rectangle(render_frame, (0, 0), (w, 50), (0, 0, 200), -1)
+        cv2.rectangle(render_frame, (0, 0), (w, 50), alert_color, -1)
         # 3. Vẽ bounding box từng đối tượng lửa
         for d in detections:
             x1, y1, x2, y2 = d["box"]
 
-            box_color = (0, 0, 255)  # Màu đỏ cho lửa
+            box_color = (0, 0, 255) if d.get("label") == "fire" else (0, 165, 255)
 
             # Bounding box
             cv2.rectangle(render_frame, (x1, y1), (x2, y2), box_color, 2)
@@ -78,20 +80,26 @@ def draw_overlay(frame, detections, fps=None, ai_fps=None):
     painter = ImageDraw.Draw(pil_image)
 
     if detections:
+        banner_text = (
+            "!!! CẢNH BÁO: PHÁT HIỆN LỬA !!!"
+            if has_fire else "CẢNH BÁO: PHÁT HIỆN KHÓI"
+        )
         painter.text(
-            (18, 10), "!!! CẢNH BÁO: PHÁT HIỆN LỬA !!!",
+            (18, 10), banner_text,
             font=_font(25, bold=True), fill=(255, 255, 255)
         )
         tag_font = _font(17, bold=True)
         for d in detections:
             x1, y1, _, _ = d["box"]
-            tag_text = f"LỬA {d['conf']:.2f}"
+            label = "LỬA" if d.get("label") == "fire" else "KHÓI"
+            tag_text = f"{label} {d['conf']:.2f}"
             left, top, right, bottom = painter.textbbox((0, 0), tag_text, font=tag_font)
             text_w, text_h = right - left, bottom - top
             tag_y = max(y1 - text_h - 10, 55)
+            tag_color = (220, 0, 0) if d.get("label") == "fire" else (255, 140, 0)
             painter.rectangle(
                 (x1, tag_y, x1 + text_w + 8, tag_y + text_h + 8),
-                fill=(220, 0, 0)
+                fill=tag_color
             )
             painter.text((x1 + 4, tag_y + 2), tag_text, font=tag_font, fill=(255, 255, 255))
     else:

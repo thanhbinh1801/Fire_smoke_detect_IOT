@@ -18,7 +18,8 @@ FRAME_HEIGHT = 480
 # Nền tảng đang chạy: 
 # "laptop" (webcam qua OpenCV, buzzer & led giả lập qua console)
 # "pi" (camera CSI qua Picamera2, passive buzzer & đèn LED thật qua GPIO)
-PLATFORM = "pi"
+# PLATFORM = "pi"
+PLATFORM = "laptop"
 
 # Webcam index khi chạy test trên laptop (0 = webcam mặc định)
 WEBCAM_INDEX = 0
@@ -49,6 +50,7 @@ CAMERA_SWAP_RB = False
 
 # Tốc độ khung hình mong muốn cho camera (30 FPS)
 CAMERA_FPS = 30
+CAMERA_STALE_TIMEOUT = 2.0
 
 # --- CẤU HÌNH TỐI ƯU HIỆU NĂNG & ĐỘ CHÍNH XÁC (ASYNC WORKER & VOTING) ---
 # Tỷ lệ Frame-Skip dùng cho luồng đồng bộ dự phòng (khi không chạy async)
@@ -87,3 +89,12 @@ SNAPSHOT_DIR = "data/snapshots"
 # Hiển thị trực tiếp trên màn hình Raspberry Pi, không dùng web server/Flask.
 SHOW_DISPLAY = True
 WINDOW_NAME = "Hệ thống nhận diện lửa - IoT"
+
+# --- WEB DASHBOARD ---
+# Chỉ mở ra mạng LAN tin cậy; không forward cổng này trực tiếp ra Internet.
+WEB_HOST = "0.0.0.0"
+WEB_PORT = 5000
+WEB_STREAM_FPS = 12
+
+# Chỉ bật cảnh báo sau số lần suy luận liên tiếp có phát hiện lửa.
+FIRE_CONFIRMATION_FRAMES = 2

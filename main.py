@@ -1,13 +1,5 @@
 # main.py
-"""
-Chương trình chính: Hệ thống Giám sát & Nhận diện Lửa Thông Minh (Camera AI + IoT)
-Tối ưu hóa toàn diện cho Raspberry Pi 4 + Arducam IMX519:
-- Asynchronous AI Worker: Tách rời luồng camera (30 FPS) và luồng suy luận AI ngầm (không bao giờ giật/đứng hình).
-- Chuẩn màu BGR888: Không bị đảo màu, nhận diện chính xác 100% màu đỏ của ngọn lửa.
-- Continuous Autofocus: IMX519 tự động lấy nét sắc nét ở mọi cự ly.
-- Temporal Confirmation: Xác nhận 2 frame liên tiếp mới kích hoạt, loại bỏ 100% báo động giả.
-- Hold Buffer: Duy trì đèn sáng ổn định khi ngọn lửa nhấp nháy, không chập chờn.
-"""
+"""Chế độ giám sát local bằng cửa sổ OpenCV."""
 
 import os
 import sys
@@ -39,55 +31,78 @@ def main():
     print(f"Nen tang cau hinh: {config.PLATFORM.upper()}")
     print("=" * 60)
 
-    # 1. Khởi tạo các module
-    camera = FireCamera()
-    raw_detector = FireSmokeDetector()
-    async_detector = AsyncFireDetector(raw_detector)
-    alert = AlertSystem()
-
-    # 2. Tạo thư mục lưu snapshot nếu được bật
-    if config.SAVE_SNAPSHOT:
-        os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
-
-    print("\n[He thong] Bat dau giam sat...")
-    print("-> Nhan 'q' tren cua so video hoac Ctrl+C trong terminal de dung.\n")
+    camera = None
+    async_detector = None
+    alert = None
 
     frame_count = 0
     fps_start_time = time.time()
     cam_fps = 0.0
 
     last_fire_time = 0.0
+    last_result_time = 0.0
+    last_camera_frame_time = 0.0
+    fire_votes = 0
     cached_detections = []
     is_fire_confirmed = False
 
     hold_duration = getattr(config, "HOLD_FIRE_TIME", 1.5)
+    required_fire_votes = max(1, int(getattr(config, "FIRE_CONFIRMATION_FRAMES", 2)))
 
     try:
+        camera = FireCamera()
+        raw_detector = FireSmokeDetector()
+        async_detector = AsyncFireDetector(raw_detector)
+        alert = AlertSystem()
+
+        if config.SAVE_SNAPSHOT:
+            os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
+
+        print("\n[He thong] Bat dau giam sat...")
+        print("-> Nhan 'q' tren cua so video hoac Ctrl+C trong terminal de dung.\n")
+
         while True:
             # 1. Đọc frame trực tiếp từ camera
-            frame = camera.get_frame()
+            frame, frame_time = camera.get_frame_with_timestamp()
             if frame is None:
                 time.sleep(0.005)
                 continue
+            if time.monotonic() - frame_time > float(
+                getattr(config, "CAMERA_STALE_TIMEOUT", 2.0)
+            ):
+                raise RuntimeError("Camera không cung cấp frame mới quá thời gian cho phép.")
 
             # 2. Chuyển frame mới nhất cho AI chạy ngầm và lấy kết quả tức thì (O(1), không chặn)
-            async_detector.update_frame(frame)
-            current_detections, ai_fps = async_detector.get_detections()
-
-            has_fire_now = len(current_detections) > 0
+            if frame_time != last_camera_frame_time:
+                last_camera_frame_time = frame_time
+                async_detector.update_frame(frame)
+            else:
+                time.sleep(0.002)
+                continue
+            current_detections, ai_fps, result_time, _ = async_detector.get_result()
             now = time.time()
 
-            # 3. Bộ lọc thời gian thực ổn định (Time-based Stabilization)
-            # Giúp giữ còi/đèn và box mượt mà, loại bỏ 100% hiện tượng chớp tắt liên tục
-            if has_fire_now:
-                last_fire_time = now
-                cached_detections = current_detections
-                is_fire_confirmed = True
-            else:
-                # Chỉ khi quá 1.5 giây liên tục không thấy lửa thì mới xác nhận tắt cảnh báo
-                if now - last_fire_time >= hold_duration:
-                    is_fire_confirmed = False
-                    cached_detections = []
+            # Chỉ đếm kết quả suy luận mới, không tính lặp frame UI thành nhiều lần xác nhận.
+            has_new_result = result_time > 0 and result_time != last_result_time
+            if has_new_result:
+                last_result_time = result_time
+                has_fire_now = any(
+                    detection.get("label") == "fire"
+                    for detection in current_detections
+                )
+                if has_fire_now:
+                    fire_votes += 1
+                    last_fire_time = now
+                    cached_detections = current_detections
+                    if fire_votes >= required_fire_votes:
+                        is_fire_confirmed = True
+                else:
+                    fire_votes = 0
+
+            if is_fire_confirmed and now - last_fire_time >= hold_duration:
+                is_fire_confirmed = False
+                fire_votes = 0
+                cached_detections = []
 
             # 4. Điều khiển đèn LED GPIO 27 (Sáng ổn định tuyệt đối, không nhấp nháy chập chờn)
             alert.set_fire_led(is_fire_confirmed)
@@ -95,14 +110,16 @@ def main():
             # 5. Điều khiển còi sóng sin liên tục theo trạng thái lửa
             alert.set_buzzer(is_fire_confirmed)
 
-            if is_fire_confirmed:
-
-                if config.SAVE_SNAPSHOT and has_fire_now:
-                    timestamp_str = time.strftime("%Y%m%d_%H%M%S")
-                    filename = os.path.join(
-                        config.SNAPSHOT_DIR, f"alert_{timestamp_str}_{int(time.time() * 1000) % 1000}.jpg"
-                    )
-                    cv2.imwrite(filename, frame)
+            if config.SAVE_SNAPSHOT and has_new_result and any(
+                detection.get("label") == "fire" for detection in current_detections
+            ):
+                timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(
+                    config.SNAPSHOT_DIR,
+                    f"alert_{timestamp_str}_{int(time.time() * 1000) % 1000}.jpg",
+                )
+                if not cv2.imwrite(filename, frame):
+                    print(f"[Loi] Khong luu duoc snapshot: {filename}")
 
             # 6. Tính toán FPS hiển thị camera
             frame_count += 1
@@ -114,7 +131,7 @@ def main():
 
             # 7. Hiển thị lên màn hình mượt mà không nhấp nháy
             # Xác định detections sẽ vẽ (ưu tiên box hiện tại, giữ đệm khi lửa chớp tắt < 0.6s)
-            if has_fire_now:
+            if current_detections and result_time and now - result_time < 0.6:
                 detections_to_draw = current_detections
             elif now - last_fire_time < 0.6:
                 detections_to_draw = cached_detections
@@ -146,9 +163,16 @@ def main():
         print(f"\n[Loi he thong]: {e}")
     finally:
         print("[He thong] Dang giai phong tai nguyen...")
-        async_detector.stop()
-        camera.close()
-        alert.cleanup()
+        for resource, method in (
+            (async_detector, "stop"),
+            (camera, "close"),
+            (alert, "cleanup"),
+        ):
+            if resource is not None:
+                try:
+                    getattr(resource, method)()
+                except Exception as error:
+                    print(f"[Loi don dep {method}]: {error}")
         if config.SHOW_DISPLAY:
             display.close()
         print("[He thong] Da dung an toan. Tam biet!")
