@@ -19,6 +19,7 @@ class FireCamera:
         self.platform = config.PLATFORM
         self.running = True
         self.frame = None
+        self.frame_updated_at = 0.0
         self.lock = threading.Lock()
         self.lens_position = getattr(config, "CAMERA_LENS_POSITION", 2.0)
         self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
@@ -152,19 +153,27 @@ class FireCamera:
 
                 with self.lock:
                     self.frame = current_frame
+                    self.frame_updated_at = time.monotonic()
 
             except Exception:
                 time.sleep(0.01)
 
     def get_frame(self):
         """Trả về 1 frame dạng numpy array."""
+        frame, _ = self.get_frame_with_timestamp()
+        return frame
+
+    def get_frame_with_timestamp(self):
+        """Trả về bản sao frame mới nhất cùng thời điểm capture monotonic."""
         with self.lock:
             if self.frame is not None:
-                return self.frame.copy()
+                return self.frame.copy(), self.frame_updated_at
 
         time.sleep(0.02)
         with self.lock:
-            return self.frame.copy() if self.frame is not None else None
+            if self.frame is not None:
+                return self.frame.copy(), self.frame_updated_at
+            return None, 0.0
 
     def close(self):
         """Giải phóng camera"""

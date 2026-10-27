@@ -109,8 +109,10 @@ class AlertSystem:
                     try:
                         self.buzzer.frequency = int(frequency)
                         self.buzzer.value = max(0.0, volume)
-                    except Exception:
-                        pass
+                    except Exception as error:
+                        print(f"[Cảnh báo] Lỗi điều khiển buzzer: {error}")
+                        self._should_buzz = False
+                        break
                 elif self.platform == "pi":
                     self.buzzer.on()
             else:
@@ -168,12 +170,14 @@ class AlertSystem:
             return False
 
         self.last_alert_time = now
-        worker = threading.Thread(target=self._buzz_worker, daemon=True)
-        worker.start()
+        self.set_buzzer(True)
         return True
 
     def cleanup(self):
         """Dọn dẹp tài nguyên khi tắt chương trình"""
+        self._should_buzz = False
+        if self._buzz_thread and self._buzz_thread.is_alive():
+            self._buzz_thread.join(timeout=1.0)
         self._sound_off()
         self._led_off()
         if self.platform == "pi":
