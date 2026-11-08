@@ -23,6 +23,7 @@ import config
 from camera import FireCamera
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
+from actuators import CameraServo, WaterPump
 import display
 
 def main():
@@ -34,6 +35,8 @@ def main():
     camera = None
     async_detector = None
     alert = None
+    servo = None
+    pump = None
 
     frame_count = 0
     fps_start_time = time.time()
@@ -54,6 +57,8 @@ def main():
         raw_detector = FireSmokeDetector()
         async_detector = AsyncFireDetector(raw_detector)
         alert = AlertSystem()
+        servo = CameraServo()
+        pump = WaterPump()
 
         if config.SAVE_SNAPSHOT:
             os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
@@ -164,6 +169,8 @@ def main():
     finally:
         print("[He thong] Dang giai phong tai nguyen...")
         for resource, method in (
+            (pump, "cleanup"),
+            (servo, "cleanup"),
             (async_detector, "stop"),
             (camera, "close"),
             (alert, "cleanup"),

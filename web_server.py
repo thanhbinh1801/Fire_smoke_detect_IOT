@@ -6,10 +6,11 @@ import threading
 import time
 
 import cv2
-from flask import Flask, Response, jsonify, render_template
+from flask import Flask, Response, jsonify, render_template, request
 
 import config
 import display
+from actuators import CameraServo, WaterPump
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +22,14 @@ class FireMonitor:
         self._stop_event = threading.Event()
         self._thread = None
         self._camera = None
+        self._servo = None
+        self._pump = None
+        self._last_control_at = time.monotonic()
         self._state = {
             "status": "starting",
             "error": None,
             "platform": config.PLATFORM,
+            "camera_source": getattr(config, "CAMERA_SOURCE", "usb"),
             "model": config.MODEL_PATH,
             "camera_fps": 0.0,
             "ai_fps": 0.0,
@@ -64,7 +69,7 @@ class FireMonitor:
         return None
 
     def _run(self):
-        camera = detector = alert = None
+        camera = detector = alert = servo = pump = None
         async_detector = None
         try:
             from alert import AlertSystem
@@ -72,10 +77,16 @@ class FireMonitor:
             from detector import AsyncFireDetector, FireSmokeDetector
 
             camera = FireCamera()
-            self._camera = camera
             detector = FireSmokeDetector()
             async_detector = AsyncFireDetector(detector)
             alert = AlertSystem()
+            servo = CameraServo()
+            pump = WaterPump()
+            with self._lock:
+                self._camera = camera
+                self._servo = servo
+                self._pump = pump
+                self._last_control_at = time.monotonic()
             if config.SAVE_SNAPSHOT:
                 os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
 
@@ -90,7 +101,17 @@ class FireMonitor:
             last_fire_time = 0.0
             confirmed_fire = False
             fire_votes = 0
+            pump_fire_votes = 0
             cached_detections = []
+            pump_threshold = float(
+                getattr(config, "PUMP_CONFIDENCE_THRESHOLD", 0.6)
+            )
+            required_pump_votes = max(
+                1, int(getattr(config, "PUMP_CONFIRM_FRAMES", 3))
+            )
+            watchdog_seconds = float(
+                getattr(config, "ACTUATOR_WATCHDOG_SECONDS", 30.0)
+            )
             stream_interval = 1.0 / max(1, int(getattr(config, "WEB_STREAM_FPS", 12)))
             next_stream_at = 0.0
             loop_interval = 1.0 / max(1, int(getattr(config, "CAMERA_FPS", 30)))
@@ -133,6 +154,20 @@ class FireMonitor:
                         if detections:
                             cached_detections = detections
 
+                    pump_fire_detections = [
+                        detection for detection in fire_detections
+                        if float(detection.get("conf", 0.0)) >= pump_threshold
+                    ]
+                    if pump_fire_detections:
+                        pump_fire_votes += 1
+                        if pump_fire_votes >= required_pump_votes:
+                            pump_fire_votes = 0
+                            ok, message = pump.spray("auto", automatic=True)
+                            if ok:
+                                logger.warning("Phun tự động: %s", message)
+                    else:
+                        pump_fire_votes = 0
+
                 if confirmed_fire and now - last_fire_time >= max(
                     0.0, float(getattr(config, "HOLD_FIRE_TIME", 1.5))
                 ):
@@ -141,6 +176,16 @@ class FireMonitor:
 
                 alert.set_fire_led(confirmed_fire)
                 alert.set_buzzer(confirmed_fire)
+
+                if (
+                    pump.is_armed()
+                    and time.monotonic() - self._last_control_at > watchdog_seconds
+                ):
+                    pump.arm(False)
+                    logger.warning(
+                        "Không có điều khiển từ web trong %.0fs - tự disarm phun tự động.",
+                        watchdog_seconds,
+                    )
 
                 if config.SAVE_SNAPSHOT and fire_detections and result_time == last_result_time:
                     if result_time > 0 and result_time != getattr(self, "_snapshot_result_time", 0):
@@ -183,6 +228,9 @@ class FireMonitor:
                         for item in detections
                     ],
                     inference_error=inference_error,
+                    servo=servo.get_state(),
+                    pump=pump.get_state(),
+                    auto_armed=pump.is_armed(),
                     updated_at=now,
                 )
 
@@ -210,6 +258,8 @@ class FireMonitor:
         finally:
             cleanup_errors = []
             for name, resource, method in (
+                ("Pump", pump, "cleanup"),
+                ("Servo", servo, "cleanup"),
                 ("AI worker", async_detector, "stop"),
                 ("camera", camera, "close"),
                 ("alert", alert, "cleanup"),
@@ -217,7 +267,10 @@ class FireMonitor:
                 cleanup_error = self._cleanup(name, resource, method)
                 if cleanup_error:
                     cleanup_errors.append(cleanup_error)
-            self._camera = None
+            with self._lock:
+                self._camera = None
+                self._servo = None
+                self._pump = None
             with self._frame_ready:
                 if cleanup_errors and not self._state["error"]:
                     self._state.update(status="error", error="; ".join(cleanup_errors))
@@ -225,9 +278,87 @@ class FireMonitor:
                     self._state.update(status="stopped", fire_detected=False)
                 self._frame_ready.notify_all()
 
+    def _touch_control(self):
+        self._last_control_at = time.monotonic()
+
     def get_status(self):
         with self._lock:
-            return dict(self._state)
+            state = dict(self._state)
+            servo = self._servo
+            pump = self._pump
+        state["camera_source"] = getattr(config, "CAMERA_SOURCE", "usb")
+        state["servo"] = (
+            servo.get_state()
+            if servo is not None
+            else {"angle": None, "available": False}
+        )
+        state["pump"] = (
+            pump.get_state()
+            if pump is not None
+            else {
+                "state": "off",
+                "armed": False,
+                "available": False,
+                "seconds_remaining": 0.0,
+                "cooldown_remaining": 0.0,
+                "runs_last_minute": 0,
+                "max_per_minute": 0,
+            }
+        )
+        state["auto_armed"] = bool(pump.is_armed()) if pump is not None else False
+        self._touch_control()
+        return state
+
+    def servo_action(self, payload):
+        action = str((payload or {}).get("action", "")).strip().lower()
+        with self._lock:
+            servo = self._servo
+        if servo is None:
+            return False, "Servo chưa sẵn sàng."
+
+        self._touch_control()
+        try:
+            if action == "left":
+                angle = servo.step(-1)
+            elif action == "right":
+                angle = servo.step(+1)
+            elif action == "center":
+                angle = servo.center()
+            elif action == "set":
+                angle = servo.set_angle(float((payload or {}).get("angle")))
+            else:
+                return False, "Thao tác servo không hợp lệ."
+        except (TypeError, ValueError):
+            return False, "Góc servo không hợp lệ."
+
+        if angle is None:
+            return False, "Không điều khiển được servo."
+        return True, f"Servo ở {angle:.0f}°."
+
+    def pump_action(self, action):
+        action = str(action or "").strip().lower()
+        with self._lock:
+            pump = self._pump
+        if pump is None:
+            return False, "Bơm chưa sẵn sàng."
+
+        self._touch_control()
+        if action == "on":
+            return pump.spray("manual", automatic=False)
+        if action in ("off", "stop"):
+            return pump.stop()
+        return False, "Thao tác bơm không hợp lệ."
+
+    def set_auto_arm(self, enabled):
+        with self._lock:
+            pump = self._pump
+        if pump is None:
+            return False, "Bơm chưa sẵn sàng."
+        self._touch_control()
+        armed = pump.arm(enabled)
+        if armed:
+            return True, "Đã bật phun tự động khi xác nhận có lửa."
+        return True, "Đã tắt phun tự động."
 
     def camera_action(self, action):
         actions = {
@@ -242,6 +373,7 @@ class FireMonitor:
             camera = self._camera
         if camera is None:
             return False, "Camera chưa sẵn sàng."
+        self._touch_control()
         try:
             result = actions[action](camera)
         except Exception as error:
@@ -297,6 +429,49 @@ def create_app(monitor=None):
     def camera_action(action):
         ok, message = app.monitor.camera_action(action)
         return jsonify({"ok": ok, "message": message}), (200 if ok else 400)
+
+    @app.post("/api/servo")
+    def servo_control():
+        payload = request.get_json(silent=True) or {}
+        ok, message = app.monitor.servo_action(payload)
+        status = app.monitor.get_status()
+        return (
+            jsonify({"ok": ok, "message": message, "servo": status["servo"]}),
+            (200 if ok else 400),
+        )
+
+    @app.post("/api/pump")
+    def pump_control():
+        payload = request.get_json(silent=True) or {}
+        ok, message = app.monitor.pump_action(payload.get("action"))
+        status = app.monitor.get_status()
+        return (
+            jsonify(
+                {
+                    "ok": ok,
+                    "message": message,
+                    "pump": status["pump"],
+                    "auto_armed": status["auto_armed"],
+                }
+            ),
+            (200 if ok else 400),
+        )
+
+    @app.post("/api/pump/arm")
+    def pump_arm():
+        payload = request.get_json(silent=True) or {}
+        if "armed" not in payload:
+            return jsonify({"ok": False, "message": "Thiếu trường 'armed'."}), 400
+        value = payload.get("armed")
+        if isinstance(value, str):
+            enabled = value.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            enabled = bool(value)
+        ok, message = app.monitor.set_auto_arm(enabled)
+        return (
+            jsonify({"ok": ok, "message": message, "auto_armed": enabled}),
+            (200 if ok else 400),
+        )
 
     @app.post("/api/restart")
     def restart():

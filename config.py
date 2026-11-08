@@ -17,12 +17,19 @@ FRAME_HEIGHT = 480
 
 # Nền tảng đang chạy: 
 # "laptop" (webcam qua OpenCV, buzzer & led giả lập qua console)
-# "pi" (camera CSI qua Picamera2, passive buzzer & đèn LED thật qua GPIO)
-# PLATFORM = "pi"
-PLATFORM = "laptop"
+# "pi" (GPIO thật; camera chọn qua CAMERA_SOURCE)
+PLATFORM = "pi"
+
+# Nguồn camera: "usb" (webcam USB qua OpenCV) hoặc "csi" (Picamera2).
+# Chạy trên Pi với webcam USB thì giữ PLATFORM = "pi" và CAMERA_SOURCE = "usb".
+CAMERA_SOURCE = "usb"
 
 # Webcam index khi chạy test trên laptop (0 = webcam mặc định)
 WEBCAM_INDEX = 0
+
+# Định dạng ưu tiên cho webcam USB. MJPG cần thiết để đạt 30 FPS ở 640x480
+# trên Raspberry Pi; nếu camera không hỗ trợ, OpenCV sẽ tự fallback.
+WEBCAM_FOURCC = "MJPG"
 
 # --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
 # Bật lấy nét tự động liên tục (Continuous AF: AfMode=2)
@@ -98,3 +105,37 @@ WEB_STREAM_FPS = 12
 
 # Chỉ bật cảnh báo sau số lần suy luận liên tiếp có phát hiện lửa.
 FIRE_CONFIRMATION_FRAMES = 2
+
+# --- SERVO PAN CAMERA (SG90) ---
+# Chân BCM nối dây signal của servo (GPIO 18 hỗ trợ hardware PWM).
+# Servo PHẢI được cấp nguồn 5V riêng, chỉ nối signal và GND chung về Pi.
+SERVO_PIN = 18
+SERVO_MIN_ANGLE = 30.0
+SERVO_MAX_ANGLE = 150.0
+SERVO_CENTER_ANGLE = 90.0
+SERVO_STEP_ANGLE = 10.0
+# Độ rộng xung SG90. Nếu servo rung/kẹt ở hai biên, đổi về 0.001 / 0.002.
+SERVO_MIN_PULSE_WIDTH = 0.0005
+SERVO_MAX_PULSE_WIDTH = 0.0024
+
+# --- BƠM NƯỚC R385 QUA RELAY ---
+# Chân BCM nối chân IN của relay module (SRD-05VDC-SL-C).
+PUMP_PIN = 23
+# True nếu relay kích mức HIGH, False nếu relay kích mức LOW.
+# Board "High/Low Level Trigger" có jumper chọn mức; đặt cho khớp.
+PUMP_ACTIVE_HIGH = True
+
+# Chỉ phun khi phát hiện lửa đạt ngưỡng tin cậy riêng (cao hơn ngưỡng hiển thị).
+PUMP_CONFIDENCE_THRESHOLD = 0.60
+# Số kết quả suy luận liên tiếp cần xác nhận trước khi phun.
+PUMP_CONFIRM_FRAMES = 3
+# Thời gian phun tối đa mỗi lần (giây).
+PUMP_MAX_SECONDS = 5.0
+# Thời gian chờ giữa hai lần phun (giây).
+PUMP_COOLDOWN = 15.0
+# Giới hạn số lần phun trong 60 giây.
+PUMP_MAX_PER_MINUTE = 4
+
+# Nếu không có thao tác điều khiển nào từ web trong khoảng này (giây),
+# hệ thống tự disarm chế độ phun tự động. Bơm vẫn tự tắt theo PUMP_MAX_SECONDS.
+ACTUATOR_WATCHDOG_SECONDS = 30.0

@@ -149,6 +149,11 @@
     }
     .control-button:hover:not(:disabled) { color: white; border-color: #73a7ff55; background: #73a7ff12; transform: translateY(-1px); }
     .control-button:disabled { opacity: .48; cursor: wait; }
+    .control-button.danger { color: #ffb3b3; border-color: #ff696944; background: #ff696914; }
+    .control-button.danger:hover:not(:disabled) { color: #fff; border-color: #ff696988; background: #ff696925; }
+    .control-button.active { color: #081019; border-color: var(--green); background: var(--green); }
+    .control-button.active:hover:not(:disabled) { color: #081019; border-color: var(--green); background: #62e6b2; }
+    .actuator-status { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
     kbd { padding: 1px 5px; color: var(--muted); border: 1px solid #ffffff1a; border-radius: 4px; font: inherit; }
     button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .detections-list { display: grid; gap: 8px; }
@@ -329,6 +334,30 @@
         <section class="panel">
           <div class="panel-heading">
             <div class="panel-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v6m0 6v6M5.6 5.6l4.2 4.2m4.4 4.4 4.2 4.2m0-12.8-4.2 4.2m-4.4 4.4-4.2 4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+              Điều khiển thiết bị
+            </div>
+            <span class="overlay-chip" id="servo-angle">--°</span>
+          </div>
+          <div class="section-body">
+            <p class="section-subtitle">Servo pan webcam và bơm R385 qua relay. Chỉ dùng trong mạng LAN tin cậy.</p>
+            <div class="buttons">
+              <button class="control-button" data-servo="left" title="Quay camera sang trái">← Trái</button>
+              <button class="control-button" data-servo="center" title="Đưa camera về giữa">Center</button>
+              <button class="control-button" data-servo="right" title="Quay camera sang phải">Phải →</button>
+              <button class="control-button" id="auto-arm" title="Bật/tắt phun tự động khi xác nhận có lửa">Bật phun tự động</button>
+            </div>
+            <div class="buttons" style="margin-top: 8px;">
+              <button class="control-button" id="pump-on" title="Phun nước thủ công một đợt">Phun nước</button>
+              <button class="control-button danger" id="pump-stop" title="Dừng bơm ngay lập tức">DỪNG BƠM</button>
+            </div>
+            <p class="actuator-status" id="pump-status">Bơm: đang tắt.</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div class="panel-title">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5h16v14H4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
               Đối tượng nhận diện
             </div>
@@ -358,9 +387,42 @@
     };
     let connected = false;
     let refreshInProgress = false;
+    let autoArmed = false;
 
     function setText(element, value) {
       element.textContent = value;
+    }
+
+    function updateActuators(data) {
+      const servo = data.servo || {};
+      const pump = data.pump || {};
+      autoArmed = Boolean(data.auto_armed);
+
+      setText(
+        $("servo-angle"),
+        servo.angle == null ? "--°" : `${Math.round(Number(servo.angle))}°`
+      );
+
+      const armButton = $("auto-arm");
+      armButton.classList.toggle("active", autoArmed);
+      armButton.textContent = autoArmed ? "Đang bật tự động" : "Bật phun tự động";
+
+      const pumpStatus = $("pump-status");
+      const running = pump.state === "on";
+      if (running) {
+        pumpStatus.textContent = `Bơm: ĐANG PHUN · còn ${Number(pump.seconds_remaining || 0).toFixed(1)}s`;
+      } else if (autoArmed) {
+        const cooldown = Number(pump.cooldown_remaining || 0);
+        pumpStatus.textContent = `Bơm: tắt · tự động bật${cooldown > 0 ? ` · cooldown ${Math.ceil(cooldown)}s` : ""} · ${pump.runs_last_minute || 0}/${pump.max_per_minute || 0} lần/phút`;
+      } else {
+        pumpStatus.textContent = "Bơm: đang tắt.";
+      }
+      pumpStatus.style.color = running ? "var(--red)" : "";
+
+      const isUsb = String(data.camera_source || "").toLowerCase() === "usb";
+      document
+        .querySelectorAll('[data-action="autofocus"], [data-action="focus_far"], [data-action="focus_near"]')
+        .forEach((button) => { button.hidden = isUsb; });
     }
 
     function renderDetections(items) {
@@ -439,6 +501,7 @@
           ? "Kiểm tra kết nối camera, model ONNX và cấu hình rồi thử lại."
           : "Hình ảnh trực tiếp sẽ xuất hiện tại đây khi camera sẵn sàng.")
       );
+      updateActuators(data);
       renderDetections(detections);
     }
 
@@ -477,6 +540,49 @@
           button.disabled = false;
         }
       });
+    });
+
+    async function postJson(url, body, button) {
+      if (button) button.disabled = true;
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message || `HTTP ${response.status}`);
+        }
+        return result;
+      } catch (error) {
+        setText($("error"), error.message);
+        return null;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    document.querySelectorAll("[data-servo]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const result = await postJson("/api/servo", { action: button.dataset.servo }, button);
+        if (result) refresh();
+      });
+    });
+
+    $("pump-on").addEventListener("click", async () => {
+      const result = await postJson("/api/pump", { action: "on" }, $("pump-on"));
+      if (result) refresh();
+    });
+
+    $("pump-stop").addEventListener("click", async () => {
+      const result = await postJson("/api/pump", { action: "stop" }, $("pump-stop"));
+      if (result) refresh();
+    });
+
+    $("auto-arm").addEventListener("click", async () => {
+      const result = await postJson("/api/pump/arm", { armed: !autoArmed }, $("auto-arm"));
+      if (result) refresh();
     });
 
     $("restart").addEventListener("click", async () => {
