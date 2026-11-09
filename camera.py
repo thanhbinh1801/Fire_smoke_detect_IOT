@@ -71,7 +71,7 @@ class FireCamera:
         camera_config = self.picam2.create_video_configuration(
             main={
                 "size": (config.FRAME_WIDTH, config.FRAME_HEIGHT),
-                "format": "BGR888",
+                "format": "RGB888",
             },
             controls={"FrameRate": target_fps},
         )
@@ -181,8 +181,7 @@ class FireCamera:
         while self.running:
             try:
                 if self.source == "csi":
-                    raw = self.picam2.capture_array()
-                    base_bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+                    base_bgr = self.picam2.capture_array()
                 else:
                     ok, raw = self.cap.read()
                     if not ok:
@@ -206,6 +205,12 @@ class FireCamera:
         """Trả về 1 frame dạng numpy array (BGR)."""
         frame, _ = self.get_frame_with_timestamp()
         return frame
+
+    def get_frame_if_new(self, last_timestamp=0.0):
+        with self.lock:
+            if self.frame is not None and self.frame_updated_at != last_timestamp:
+                return self.frame.copy(), self.frame_updated_at
+            return None, self.frame_updated_at
 
     def get_frame_with_timestamp(self):
         """Trả về bản sao frame mới nhất cùng thời điểm capture monotonic."""

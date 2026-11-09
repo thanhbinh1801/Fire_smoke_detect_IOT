@@ -24,9 +24,13 @@ class CameraServo:
         self.max_angle = float(getattr(config, "SERVO_MAX_ANGLE", 150.0))
         self.center_angle = float(getattr(config, "SERVO_CENTER_ANGLE", 90.0))
         self.step_angle = float(getattr(config, "SERVO_STEP_ANGLE", 10.0))
+        self.settle_seconds = max(
+            0.0, float(getattr(config, "SERVO_SETTLE_SECONDS", 0.6))
+        )
         self._lock = threading.Lock()
         self._angle = self._clamp(self.center_angle)
         self._servo = None
+        self._detach_timer = None
 
         if self.platform == "pi":
             from gpiozero import AngularServo
@@ -43,6 +47,8 @@ class CameraServo:
                     getattr(config, "SERVO_MAX_PULSE_WIDTH", 0.0024)
                 ),
             )
+            with self._lock:
+                self._schedule_detach_locked()
             print(
                 f"[Servo] SG90 trên GPIO BCM {config.SERVO_PIN}, "
                 f"góc {self.min_angle:.0f}-{self.max_angle:.0f}."
@@ -53,6 +59,24 @@ class CameraServo:
     def _clamp(self, angle):
         return max(self.min_angle, min(self.max_angle, float(angle)))
 
+    def _schedule_detach_locked(self):
+        if self._detach_timer is not None:
+            self._detach_timer.cancel()
+            self._detach_timer = None
+        if self._servo is not None and self.settle_seconds > 0.0:
+            self._detach_timer = threading.Timer(self.settle_seconds, self._detach)
+            self._detach_timer.daemon = True
+            self._detach_timer.start()
+
+    def _detach(self):
+        with self._lock:
+            self._detach_timer = None
+            if self._servo is not None:
+                try:
+                    self._servo.detach()
+                except Exception:
+                    pass
+
     def set_angle(self, angle):
         """Đặt góc tuyệt đối, tự kẹp trong khoảng an toàn."""
         value = self._clamp(angle)
@@ -61,6 +85,7 @@ class CameraServo:
             if self._servo is not None:
                 try:
                     self._servo.angle = value
+                    self._schedule_detach_locked()
                 except Exception as error:
                     print(f"[Servo] Lỗi điều khiển: {error}")
                     return None
@@ -91,6 +116,9 @@ class CameraServo:
 
     def cleanup(self):
         with self._lock:
+            if self._detach_timer is not None:
+                self._detach_timer.cancel()
+                self._detach_timer = None
             if self._servo is not None:
                 try:
                     self._servo.detach()

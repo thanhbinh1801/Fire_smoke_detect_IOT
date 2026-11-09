@@ -89,13 +89,15 @@ Các thiết lập chính trong `config.py`:
 
 - `PLATFORM = "pi"`, `CAMERA_SOURCE = "usb"`: Pi dùng webcam USB.
 - `WEBCAM_INDEX = 0`: đổi nếu webcam không phải `/dev/video0`.
-- `CONFIDENCE_THRESHOLD`: ngưỡng hiển thị/cảnh báo chung.
+- `CONFIDENCE_THRESHOLD = 0.40`: ngưỡng hiển thị/cảnh báo chung.
+- `FIRE_CONFIRM_WINDOW_SECONDS = 1.5`, `FIRE_CONFIRM_MIN_RATIO = 0.6`, `FIRE_CONFIRM_MIN_SAMPLES = 4`: xác nhận lửa theo cửa sổ thời gian cho còi/LED.
 - `PUMP_CONFIDENCE_THRESHOLD = 0.60`: ngưỡng riêng để phun nước (cao hơn để giảm báo động giả).
-- `PUMP_CONFIRM_FRAMES = 3`: số kết quả liên tiếp xác nhận trước khi phun tự động.
+- `PUMP_CONFIRM_WINDOW_SECONDS = 3.0`, `PUMP_CONFIRM_MIN_RATIO = 0.7`, `PUMP_CONFIRM_MIN_SAMPLES = 8`: cửa sổ xác nhận trước khi phun tự động.
 - `PUMP_MAX_SECONDS = 5.0`, `PUMP_COOLDOWN = 15.0`, `PUMP_MAX_PER_MINUTE = 4`: giới hạn an toàn của bơm.
-- `SERVO_PIN = 18`, `SERVO_MIN_ANGLE = 30`, `SERVO_MAX_ANGLE = 150`: giới hạn pan camera.
+- `SERVO_PIN = 18`, `SERVO_MIN_ANGLE = 30`, `SERVO_MAX_ANGLE = 150`, `SERVO_SETTLE_SECONDS = 0.6`: giới hạn pan camera và tự detach PWM sau khi quay để chống rung.
 - `PUMP_PIN = 23`, `PUMP_ACTIVE_HIGH = True`: chân relay và mức kích.
-- `ACTUATOR_WATCHDOG_SECONDS = 30`: tự disarm phun tự động nếu không có điều khiển/status từ web.
+- `ACTUATOR_WATCHDOG_SECONDS = 600`: tự disarm phun tự động nếu không có thao tác điều khiển thật từ web trong 10 phút (việc mở tab poll `/api/status` không reset bộ đếm).
+- `DISPLAY_FPS = 15`: giới hạn tần suất vẽ overlay ở `main.py` để nhường CPU cho ONNX.
 - `SAVE_SNAPSHOT`: lưu ảnh khi có lửa (mặc định tắt).
 
 ## Chạy giao diện web
@@ -134,8 +136,22 @@ Chế độ cửa sổ OpenCV cũ vẫn chạy được bằng `python main.py`,
 - Auto-spray mặc định **OFF**. Chỉ bật sau khi đã kiểm tra vùng phun không có người/thiết bị điện.
 - Bơm luôn tự tắt sau `PUMP_MAX_SECONDS`; nút **DỪNG BƠM** luôn có tác dụng.
 - Không chạy bơm khô. Kiểm tra nước và đường ống trước khi arm.
-- Mất kết nối web quá 30 giây → tự disarm auto (bơm vẫn tự tắt theo timer).
+- Không có thao tác điều khiển từ web quá 10 phút (`ACTUATOR_WATCHDOG_SECONDS`) → tự disarm auto (bơm vẫn tự tắt theo timer).
 - Khi thoát chương trình, relay và servo được đưa về trạng thái an toàn.
+- Raspberry Pi 4 chạy ONNX 3 luồng liên tục cần tản nhiệt + quạt và nguồn 5V/3A ổn định để tránh giảm xung ở 80°C.
+- Với relay 5V điều khiển từ GPIO 3.3V của Pi, ưu tiên mức kích HIGH (`PUMP_ACTIVE_HIGH = True`) và kiểm tra thực tế relay nhả dứt khoát khi tắt.
+
+## Đo hiệu năng (Benchmark)
+
+Chạy benchmark độc lập (dùng ảnh tổng hợp, file video/ảnh hoặc webcam):
+
+```bash
+python benchmark.py --source synthetic --frames 100 --threads 3
+python benchmark.py --source sample.mp4 --frames 200 --threads 3
+python benchmark.py --source 0 --frames 200 --threads 3
+```
+
+Trên Raspberry Pi, script tự đọc thêm nhiệt độ (`vcgencmd measure_temp`) và cờ giảm xung (`vcgencmd get_throttled`).
 
 ## Đánh giá model
 
@@ -154,8 +170,10 @@ Các model cộng đồng về fire/smoke có thể dùng làm ứng viên kiể
 
 - `web_server.py`: Flask dashboard, REST endpoints, pipeline camera/AI/cảnh báo/actuator.
 - `templates/index.html`: giao diện dashboard.
-- `actuators.py`: servo SG90 và bơm R385 qua relay, kèm giới hạn an toàn.
-- `main.py`: chế độ cửa sổ OpenCV (khởi tạo servo/bơm ở trạng thái an toàn, không điều khiển).
+- `actuators.py`: servo SG90 (tự detach sau khi quay) và bơm R385 qua relay, kèm giới hạn an toàn.
+- `confirmation.py`: xác nhận lửa theo cửa sổ thời gian dùng chung cho cảnh báo và bơm.
+- `benchmark.py`: đo độ trễ preprocess/infer/postprocess, FPS và nhiệt độ Pi.
+- `main.py`: chế độ cửa sổ OpenCV (chỉ camera + AI + còi/LED).
 - `camera.py`: webcam USB qua OpenCV hoặc Picamera2 CSI.
 - `detector.py`: suy luận ONNX, lọc box và worker bất đồng bộ.
 - `display.py`: overlay hình ảnh.

@@ -143,9 +143,9 @@ class AlertSystem:
         """
         if has_fire:
             with self._lock:
-                if self.is_buzzing:
-                    return  # đang chạy rồi, không spawn thêm
                 self._should_buzz = True
+                if self.is_buzzing:
+                    return
                 self.is_buzzing = True
             if self.platform == "laptop":
                 print("[CẢNH BÁO] >>> CÒI GIẢ LẬP: ĐANG HÚ CẢNH BÁO <<<")

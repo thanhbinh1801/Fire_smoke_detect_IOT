@@ -21,9 +21,9 @@ if sys.platform == "win32":
 
 import config
 from camera import FireCamera
+from confirmation import build_alarm_confirmer
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
-from actuators import CameraServo, WaterPump
 import display
 
 def main():
@@ -35,9 +35,8 @@ def main():
     camera = None
     async_detector = None
     alert = None
-    servo = None
-    pump = None
 
+    frame = None
     frame_count = 0
     fps_start_time = time.time()
     cam_fps = 0.0
@@ -45,20 +44,17 @@ def main():
     last_fire_time = 0.0
     last_result_time = 0.0
     last_camera_frame_time = 0.0
-    fire_votes = 0
     cached_detections = []
     is_fire_confirmed = False
-
-    hold_duration = getattr(config, "HOLD_FIRE_TIME", 1.5)
-    required_fire_votes = max(1, int(getattr(config, "FIRE_CONFIRMATION_FRAMES", 2)))
+    alarm_confirmer = build_alarm_confirmer()
+    display_interval = 1.0 / max(1, int(getattr(config, "DISPLAY_FPS", 15)))
+    next_display_at = 0.0
 
     try:
         camera = FireCamera()
         raw_detector = FireSmokeDetector()
         async_detector = AsyncFireDetector(raw_detector)
         alert = AlertSystem()
-        servo = CameraServo()
-        pump = WaterPump()
 
         if config.SAVE_SNAPSHOT:
             os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
@@ -67,9 +63,8 @@ def main():
         print("-> Nhan 'q' tren cua so video hoac Ctrl+C trong terminal de dung.\n")
 
         while True:
-            # 1. Đọc frame trực tiếp từ camera
-            frame, frame_time = camera.get_frame_with_timestamp()
-            if frame is None:
+            new_frame, frame_time = camera.get_frame_if_new(last_camera_frame_time)
+            if frame_time <= 0.0:
                 time.sleep(0.005)
                 continue
             if time.monotonic() - frame_time > float(
@@ -77,18 +72,19 @@ def main():
             ):
                 raise RuntimeError("Camera không cung cấp frame mới quá thời gian cho phép.")
 
-            # 2. Chuyển frame mới nhất cho AI chạy ngầm và lấy kết quả tức thì (O(1), không chặn)
-            if frame_time != last_camera_frame_time:
+            if new_frame is not None:
+                frame = new_frame
                 last_camera_frame_time = frame_time
                 async_detector.update_frame(frame)
+                frame_count += 1
             else:
                 time.sleep(0.002)
                 continue
+
             current_detections, ai_fps, result_time, _ = async_detector.get_result()
             now = time.time()
 
-            # Chỉ đếm kết quả suy luận mới, không tính lặp frame UI thành nhiều lần xác nhận.
-            has_new_result = result_time > 0 and result_time != last_result_time
+            has_new_result = bool(result_time and result_time != last_result_time)
             if has_new_result:
                 last_result_time = result_time
                 has_fire_now = any(
@@ -96,23 +92,16 @@ def main():
                     for detection in current_detections
                 )
                 if has_fire_now:
-                    fire_votes += 1
                     last_fire_time = now
                     cached_detections = current_detections
-                    if fire_votes >= required_fire_votes:
-                        is_fire_confirmed = True
-                else:
-                    fire_votes = 0
 
-            if is_fire_confirmed and now - last_fire_time >= hold_duration:
-                is_fire_confirmed = False
-                fire_votes = 0
+            is_fire_confirmed = alarm_confirmer.update(
+                current_detections, now=now, result_time=result_time
+            )
+            if not is_fire_confirmed and not current_detections:
                 cached_detections = []
 
-            # 4. Điều khiển đèn LED GPIO 27 (Sáng ổn định tuyệt đối, không nhấp nháy chập chờn)
             alert.set_fire_led(is_fire_confirmed)
-
-            # 5. Điều khiển còi sóng sin liên tục theo trạng thái lửa
             alert.set_buzzer(is_fire_confirmed)
 
             if config.SAVE_SNAPSHOT and has_new_result and any(
@@ -126,39 +115,38 @@ def main():
                 if not cv2.imwrite(filename, frame):
                     print(f"[Loi] Khong luu duoc snapshot: {filename}")
 
-            # 6. Tính toán FPS hiển thị camera
-            frame_count += 1
             elapsed = time.time() - fps_start_time
             if elapsed >= 1.0:
                 cam_fps = frame_count / elapsed
                 frame_count = 0
                 fps_start_time = time.time()
 
-            # 7. Hiển thị lên màn hình mượt mà không nhấp nháy
-            # Xác định detections sẽ vẽ (ưu tiên box hiện tại, giữ đệm khi lửa chớp tắt < 0.6s)
-            if current_detections and result_time and now - result_time < 0.6:
-                detections_to_draw = current_detections
-            elif now - last_fire_time < 0.6:
-                detections_to_draw = cached_detections
-            else:
-                detections_to_draw = []
-
-            display_frame = display.draw_overlay(frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps)
-
-            # 8. Hiển thị trực tiếp bằng cửa sổ OpenCV trên máy local.
             if config.SHOW_DISPLAY:
-                action = display.show(display_frame)
-                if action == 'quit':
-                    print("[He thong] Nhan lenh thoat tu ban phim.")
-                    break
-                elif action == 'color':
-                    camera.toggle_color_swap()
-                elif action == 'focus':
-                    camera.trigger_autofocus()
-                elif action == 'focus_near':
-                    camera.adjust_focus(+0.2)
-                elif action == 'focus_far':
-                    camera.adjust_focus(-0.2)
+                mono_now = time.monotonic()
+                if mono_now >= next_display_at:
+                    next_display_at = mono_now + display_interval
+                    if current_detections and result_time and now - result_time < 0.6:
+                        detections_to_draw = current_detections
+                    elif now - last_fire_time < 0.6:
+                        detections_to_draw = cached_detections
+                    else:
+                        detections_to_draw = []
+
+                    display_frame = display.draw_overlay(
+                        frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps
+                    )
+                    action = display.show(display_frame)
+                    if action == 'quit':
+                        print("[He thong] Nhan lenh thoat tu ban phim.")
+                        break
+                    elif action == 'color':
+                        camera.toggle_color_swap()
+                    elif action == 'focus':
+                        camera.trigger_autofocus()
+                    elif action == 'focus_near':
+                        camera.adjust_focus(+0.2)
+                    elif action == 'focus_far':
+                        camera.adjust_focus(-0.2)
             else:
                 time.sleep(0.005)
 
@@ -169,8 +157,6 @@ def main():
     finally:
         print("[He thong] Dang giai phong tai nguyen...")
         for resource, method in (
-            (pump, "cleanup"),
-            (servo, "cleanup"),
             (async_detector, "stop"),
             (camera, "close"),
             (alert, "cleanup"),

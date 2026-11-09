@@ -8,7 +8,7 @@ Hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
-CONFIDENCE_THRESHOLD = 0.30
+CONFIDENCE_THRESHOLD = 0.40
 IOU_THRESHOLD = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
@@ -95,47 +95,35 @@ SNAPSHOT_DIR = "data/snapshots"
 # Hiện cửa sổ video (cv2.imshow). Đặt True để hiện màn hình camera, đặt False nếu chạy headless (không màn hình)
 # Hiển thị trực tiếp trên màn hình Raspberry Pi, không dùng web server/Flask.
 SHOW_DISPLAY = True
+DISPLAY_FPS = 15
 WINDOW_NAME = "Hệ thống nhận diện lửa - IoT"
 
-# --- WEB DASHBOARD ---
-# Chỉ mở ra mạng LAN tin cậy; không forward cổng này trực tiếp ra Internet.
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 5000
 WEB_STREAM_FPS = 12
 
-# Chỉ bật cảnh báo sau số lần suy luận liên tiếp có phát hiện lửa.
-FIRE_CONFIRMATION_FRAMES = 2
+FIRE_CONFIRM_WINDOW_SECONDS = 1.5
+FIRE_CONFIRM_MIN_RATIO = 0.6
+FIRE_CONFIRM_MIN_SAMPLES = 4
 
-# --- SERVO PAN CAMERA (SG90) ---
-# Chân BCM nối dây signal của servo (GPIO 18 hỗ trợ hardware PWM).
-# Servo PHẢI được cấp nguồn 5V riêng, chỉ nối signal và GND chung về Pi.
 SERVO_PIN = 18
 SERVO_MIN_ANGLE = 30.0
 SERVO_MAX_ANGLE = 150.0
 SERVO_CENTER_ANGLE = 90.0
 SERVO_STEP_ANGLE = 10.0
-# Độ rộng xung SG90. Nếu servo rung/kẹt ở hai biên, đổi về 0.001 / 0.002.
 SERVO_MIN_PULSE_WIDTH = 0.0005
 SERVO_MAX_PULSE_WIDTH = 0.0024
+SERVO_SETTLE_SECONDS = 0.6
 
-# --- BƠM NƯỚC R385 QUA RELAY ---
-# Chân BCM nối chân IN của relay module (SRD-05VDC-SL-C).
 PUMP_PIN = 23
-# True nếu relay kích mức HIGH, False nếu relay kích mức LOW.
-# Board "High/Low Level Trigger" có jumper chọn mức; đặt cho khớp.
 PUMP_ACTIVE_HIGH = True
 
-# Chỉ phun khi phát hiện lửa đạt ngưỡng tin cậy riêng (cao hơn ngưỡng hiển thị).
 PUMP_CONFIDENCE_THRESHOLD = 0.60
-# Số kết quả suy luận liên tiếp cần xác nhận trước khi phun.
-PUMP_CONFIRM_FRAMES = 3
-# Thời gian phun tối đa mỗi lần (giây).
+PUMP_CONFIRM_WINDOW_SECONDS = 3.0
+PUMP_CONFIRM_MIN_RATIO = 0.7
+PUMP_CONFIRM_MIN_SAMPLES = 8
 PUMP_MAX_SECONDS = 5.0
-# Thời gian chờ giữa hai lần phun (giây).
 PUMP_COOLDOWN = 15.0
-# Giới hạn số lần phun trong 60 giây.
 PUMP_MAX_PER_MINUTE = 4
 
-# Nếu không có thao tác điều khiển nào từ web trong khoảng này (giây),
-# hệ thống tự disarm chế độ phun tự động. Bơm vẫn tự tắt theo PUMP_MAX_SECONDS.
-ACTUATOR_WATCHDOG_SECONDS = 30.0
+ACTUATOR_WATCHDOG_SECONDS = 600.0

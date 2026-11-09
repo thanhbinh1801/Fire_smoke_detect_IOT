@@ -1,10 +1,5 @@
-# detector.py
 """
-Module nhận diện ngọn lửa sử dụng ONNX Runtime.
-Tối ưu hóa:
-- Zero-copy color pipeline: Nhận diện trực tiếp mảng RGB từ Picamera2 (không đảo ngược màu).
-- Model 480x640 chuẩn tỷ lệ: Giữ nguyên vẹn hình thái ngọn lửa, độ chính xác cao nhất.
-- Vectorized post-processing siêu nhanh.
+Module nhận diện lửa và khói sử dụng ONNX Runtime (YOLOv8n 320x320, letterbox + blobFromImage).
 """
 
 import ast
@@ -80,18 +75,8 @@ class FireSmokeDetector:
             print(f"[Detector] Metadata names không hợp lệ ({error}); dùng nhãn mặc định fire/smoke.")
             return default_names
 
-    def detect(self, frame):
-        """
-        Chạy nhận diện trên 1 frame ảnh.
-        Trả về list các dict:
-        [
-            {"label": "fire", "conf": float, "box": (x1, y1, x2, y2)},
-            ...
-        ]
-        """
+    def preprocess(self, frame):
         orig_h, orig_w = frame.shape[:2]
-
-        # Letterbox giữ tỷ lệ ảnh, tránh kéo méo đối tượng khi model dùng input vuông.
         scale = min(self.input_w / orig_w, self.input_h / orig_h)
         resized_w = max(1, int(round(orig_w * scale)))
         resized_h = max(1, int(round(orig_h * scale)))
@@ -100,15 +85,20 @@ class FireSmokeDetector:
         pad_y = (self.input_h - resized_h) // 2
         model_frame = np.full((self.input_h, self.input_w, 3), 114, dtype=np.uint8)
         model_frame[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
+        blob = cv2.dnn.blobFromImage(
+            model_frame,
+            scalefactor=1.0 / 255.0,
+            size=(self.input_w, self.input_h),
+            swapRB=True,
+            crop=False,
+        )
+        return blob, (orig_h, orig_w, scale, pad_x, pad_y)
 
-        # 2. Chuẩn hóa kênh màu: Chuyển BGR sang RGB cho mạng nơ-ron YOLOv8
-        rgb_tensor = cv2.cvtColor(model_frame, cv2.COLOR_BGR2RGB)
+    def infer(self, blob):
+        return self.session.run([self.output_name], {self.input_name: blob})
 
-        tensor = rgb_tensor.transpose((2, 0, 1)).astype(np.float32) / 255.0
-        blob = np.expand_dims(tensor, axis=0)
-
-        # 3. Chạy Inference qua ONNX Runtime
-        outputs = self.session.run([self.output_name], {self.input_name: blob})
+    def postprocess(self, outputs, meta):
+        orig_h, orig_w, scale, pad_x, pad_y = meta
         preds = np.asarray(outputs[0])
         if preds.ndim == 3:
             preds = preds[0]
@@ -122,12 +112,10 @@ class FireSmokeDetector:
         if preds.shape[1] < 5:
             raise ValueError(f"Output ONNX thiếu dữ liệu class/box: shape={preds.shape}")
 
-        # 4. Trích xuất xác suất các lớp
-        scores_matrix = preds[:, 4:]  # (num_anchors, num_classes)
+        scores_matrix = preds[:, 4:]
         class_ids = np.argmax(scores_matrix, axis=1)
         confidences = np.max(scores_matrix, axis=1)
 
-        # Lọc theo ngưỡng tin cậy
         mask = confidences >= self.conf_threshold
         if not np.any(mask):
             return []
@@ -180,6 +168,11 @@ class FireSmokeDetector:
                 })
 
         return sorted(detections, key=lambda detection: detection["conf"], reverse=True)
+
+    def detect(self, frame):
+        blob, meta = self.preprocess(frame)
+        outputs = self.infer(blob)
+        return self.postprocess(outputs, meta)
 
 
 class AsyncFireDetector:

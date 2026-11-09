@@ -74,6 +74,7 @@ class FireMonitor:
         try:
             from alert import AlertSystem
             from camera import FireCamera
+            from confirmation import build_alarm_confirmer, build_pump_confirmer
             from detector import AsyncFireDetector, FireSmokeDetector
 
             camera = FireCamera()
@@ -82,6 +83,8 @@ class FireMonitor:
             alert = AlertSystem()
             servo = CameraServo()
             pump = WaterPump()
+            alarm_confirmer = build_alarm_confirmer()
+            pump_confirmer = build_pump_confirmer()
             with self._lock:
                 self._camera = camera
                 self._servo = servo
@@ -93,6 +96,7 @@ class FireMonitor:
             self._update_state(status="running")
             logger.info("Web monitor đang chạy trên nền tảng %s", config.PLATFORM)
 
+            frame = None
             frame_count = 0
             fps_started = time.monotonic()
             camera_fps = 0.0
@@ -100,17 +104,9 @@ class FireMonitor:
             last_camera_frame_time = 0.0
             last_fire_time = 0.0
             confirmed_fire = False
-            fire_votes = 0
-            pump_fire_votes = 0
             cached_detections = []
-            pump_threshold = float(
-                getattr(config, "PUMP_CONFIDENCE_THRESHOLD", 0.6)
-            )
-            required_pump_votes = max(
-                1, int(getattr(config, "PUMP_CONFIRM_FRAMES", 3))
-            )
             watchdog_seconds = float(
-                getattr(config, "ACTUATOR_WATCHDOG_SECONDS", 30.0)
+                getattr(config, "ACTUATOR_WATCHDOG_SECONDS", 600.0)
             )
             stream_interval = 1.0 / max(1, int(getattr(config, "WEB_STREAM_FPS", 12)))
             next_stream_at = 0.0
@@ -118,8 +114,8 @@ class FireMonitor:
 
             while not self._stop_event.is_set():
                 loop_started = time.monotonic()
-                frame, frame_time = camera.get_frame_with_timestamp()
-                if frame is None:
+                new_frame, frame_time = camera.get_frame_if_new(last_camera_frame_time)
+                if frame_time <= 0.0:
                     self._stop_event.wait(0.01)
                     continue
                 if time.monotonic() - frame_time > float(
@@ -127,10 +123,16 @@ class FireMonitor:
                 ):
                     raise RuntimeError("Camera không cung cấp frame mới quá thời gian cho phép.")
 
-                has_new_frame = frame_time != last_camera_frame_time
+                has_new_frame = new_frame is not None
                 if has_new_frame:
+                    frame = new_frame
                     last_camera_frame_time = frame_time
                     async_detector.update_frame(frame)
+                    frame_count += 1
+                if frame is None:
+                    self._stop_event.wait(0.005)
+                    continue
+
                 detections, ai_fps, result_time, inference_error = async_detector.get_result()
                 now = time.time()
                 fire_detections = [
@@ -138,41 +140,28 @@ class FireMonitor:
                     if detection.get("label") == "fire"
                 ]
 
-                if result_time and result_time != last_result_time:
+                has_new_result = bool(result_time and result_time != last_result_time)
+                if has_new_result:
                     last_result_time = result_time
                     if fire_detections:
-                        fire_votes += 1
                         last_fire_time = now
                         cached_detections = detections
-                        required_votes = max(
-                            1, int(getattr(config, "FIRE_CONFIRMATION_FRAMES", 2))
-                        )
-                        if fire_votes >= required_votes:
-                            confirmed_fire = True
-                    else:
-                        fire_votes = 0
-                        if detections:
-                            cached_detections = detections
+                    elif detections:
+                        cached_detections = detections
 
-                    pump_fire_detections = [
-                        detection for detection in fire_detections
-                        if float(detection.get("conf", 0.0)) >= pump_threshold
-                    ]
-                    if pump_fire_detections:
-                        pump_fire_votes += 1
-                        if pump_fire_votes >= required_pump_votes:
-                            pump_fire_votes = 0
-                            ok, message = pump.spray("auto", automatic=True)
-                            if ok:
-                                logger.warning("Phun tự động: %s", message)
-                    else:
-                        pump_fire_votes = 0
+                confirmed_fire = alarm_confirmer.update(
+                    detections, now=now, result_time=result_time
+                )
+                if not confirmed_fire and not detections:
+                    cached_detections = []
 
-                if confirmed_fire and now - last_fire_time >= max(
-                    0.0, float(getattr(config, "HOLD_FIRE_TIME", 1.5))
+                if has_new_result and pump_confirmer.update(
+                    detections, now=now, result_time=result_time
                 ):
-                    confirmed_fire = False
-                    fire_votes = 0
+                    ok, message = pump.spray("auto", automatic=True)
+                    if ok:
+                        pump_confirmer.reset()
+                        logger.warning("Phun tự động: %s", message)
 
                 alert.set_fire_led(confirmed_fire)
                 alert.set_buzzer(confirmed_fire)
@@ -187,19 +176,15 @@ class FireMonitor:
                         watchdog_seconds,
                     )
 
-                if config.SAVE_SNAPSHOT and fire_detections and result_time == last_result_time:
-                    if result_time > 0 and result_time != getattr(self, "_snapshot_result_time", 0):
-                        timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        filename = os.path.join(
-                            config.SNAPSHOT_DIR,
-                            f"alert_{timestamp}_{int(now * 1000) % 1000}.jpg",
-                        )
-                        if not cv2.imwrite(filename, frame):
-                            logger.error("Không lưu được ảnh cảnh báo: %s", filename)
-                        self._snapshot_result_time = result_time
+                if config.SAVE_SNAPSHOT and has_new_result and fire_detections:
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    filename = os.path.join(
+                        config.SNAPSHOT_DIR,
+                        f"alert_{timestamp}_{int(now * 1000) % 1000}.jpg",
+                    )
+                    if not cv2.imwrite(filename, frame):
+                        logger.error("Không lưu được ảnh cảnh báo: %s", filename)
 
-                if has_new_frame:
-                    frame_count += 1
                 elapsed = time.monotonic() - fps_started
                 if elapsed >= 1.0:
                     camera_fps = frame_count / elapsed
@@ -306,7 +291,6 @@ class FireMonitor:
             }
         )
         state["auto_armed"] = bool(pump.is_armed()) if pump is not None else False
-        self._touch_control()
         return state
 
     def servo_action(self, payload):
