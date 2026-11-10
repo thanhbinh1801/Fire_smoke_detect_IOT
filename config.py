@@ -127,3 +127,18 @@ PUMP_COOLDOWN = 15.0
 PUMP_MAX_PER_MINUTE = 4
 
 ACTUATOR_WATCHDOG_SECONDS = 600.0
+
+# Chỉ bật cảnh báo sau số lần suy luận liên tiếp có phát hiện lửa / khói.
+FIRE_CONFIRMATION_FRAMES = 2
+SMOKE_CONFIRMATION_FRAMES = 2
+
+# --- CẤU HÌNH THÔNG BÁO TELEGRAM ---
+# Có thể điền trực tiếp bên dưới hoặc đặt qua biến môi trường TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID
+TELEGRAM_ENABLED = True
+TELEGRAM_BOT_TOKEN = "9161312599:AAGqYxyHsiSVrW8bX-4nF6Kyy3Cx5z56ZGs"  # Ví dụ: "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+TELEGRAM_CHAT_ID = "5698274871"    # Ví dụ: "987654321" hoặc "-100123456789" (nhóm)
+
+# Thời gian giãn cách tối thiểu (giây) giữa 2 lần gửi thông báo Telegram cho từng loại
+TELEGRAM_FIRE_COOLDOWN = 30.0
+TELEGRAM_SMOKE_COOLDOWN = 60.0
+TELEGRAM_TIMEOUT = 10.0

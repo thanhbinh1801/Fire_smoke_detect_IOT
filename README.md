@@ -123,12 +123,13 @@ Chế độ cửa sổ OpenCV cũ vẫn chạy được bằng `python main.py`,
 
 ## API
 
-- `GET /api/status`: trạng thái camera, AI, servo, bơm, chế độ arm.
+- `GET /api/status`: trạng thái camera, AI, servo, bơm, chế độ arm, Telegram.
 - `GET /video_feed`: luồng MJPEG.
 - `POST /api/servo` với `{"action": "left" | "right" | "center"}` hoặc `{"action": "set", "angle": 90}`.
 - `POST /api/pump` với `{"action": "on" | "stop"}`.
 - `POST /api/pump/arm` với `{"armed": true | false}`.
 - `POST /api/camera/<action>`: lấy nét/đảo màu (lấy nét chỉ có tác dụng với camera CSI).
+- `POST /api/telegram/test`: gửi ảnh và tin nhắn kiểm tra về Telegram Bot.
 - `POST /api/restart`: khởi động lại pipeline.
 
 ## An toàn vận hành
@@ -178,7 +179,8 @@ Các model cộng đồng về fire/smoke có thể dùng làm ứng viên kiể
 - `detector.py`: suy luận ONNX, lọc box và worker bất đồng bộ.
 - `display.py`: overlay hình ảnh.
 - `alert.py`: LED và buzzer.
-- `config.py`: cấu hình nền tảng, camera, model, GPIO và web.
+- `notifier.py`: gửi thông báo kèm ảnh cảnh báo qua Telegram Bot (bất đồng bộ).
+- `config.py`: cấu hình nền tảng, model, camera, GPIO, Telegram và web.
 
 ## Xử lý sự cố
 

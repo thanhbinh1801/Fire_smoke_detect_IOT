@@ -24,6 +24,7 @@ from camera import FireCamera
 from confirmation import build_alarm_confirmer
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
+from notifier import TelegramNotifier
 import display
 
 def main():
@@ -35,6 +36,7 @@ def main():
     camera = None
     async_detector = None
     alert = None
+    notifier = None
 
     frame = None
     frame_count = 0
@@ -44,17 +46,20 @@ def main():
     last_fire_time = 0.0
     last_result_time = 0.0
     last_camera_frame_time = 0.0
+    smoke_votes = 0
     cached_detections = []
     is_fire_confirmed = False
     alarm_confirmer = build_alarm_confirmer()
     display_interval = 1.0 / max(1, int(getattr(config, "DISPLAY_FPS", 15)))
     next_display_at = 0.0
+    required_smoke_votes = max(1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2)))
 
     try:
         camera = FireCamera()
         raw_detector = FireSmokeDetector()
         async_detector = AsyncFireDetector(raw_detector)
         alert = AlertSystem()
+        notifier = TelegramNotifier()
 
         if config.SAVE_SNAPSHOT:
             os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
@@ -91,29 +96,48 @@ def main():
                     detection.get("label") == "fire"
                     for detection in current_detections
                 )
+                has_smoke_now = any(
+                    detection.get("label") == "smoke"
+                    for detection in current_detections
+                )
                 if has_fire_now:
                     last_fire_time = now
                     cached_detections = current_detections
-
             is_fire_confirmed = alarm_confirmer.update(
                 current_detections, now=now, result_time=result_time
             )
+            if has_new_result:
+                if is_fire_confirmed and has_fire_now:
+                    notifier.notify(
+                        "fire", frame, current_detections, fps=cam_fps, ai_fps=ai_fps
+                    )
+                if has_smoke_now:
+                    smoke_votes += 1
+                    if smoke_votes >= required_smoke_votes and not is_fire_confirmed:
+                        notifier.notify(
+                            "smoke", frame, current_detections, fps=cam_fps, ai_fps=ai_fps
+                        )
+                else:
+                    smoke_votes = 0
+
             if not is_fire_confirmed and not current_detections:
                 cached_detections = []
 
             alert.set_fire_led(is_fire_confirmed)
             alert.set_buzzer(is_fire_confirmed)
 
-            if config.SAVE_SNAPSHOT and has_new_result and any(
+            if config.SAVE_SNAPSHOT and is_fire_confirmed and has_new_result and any(
                 detection.get("label") == "fire" for detection in current_detections
             ):
-                timestamp_str = time.strftime("%Y%m%d_%H%M%S")
-                filename = os.path.join(
-                    config.SNAPSHOT_DIR,
-                    f"alert_{timestamp_str}_{int(time.time() * 1000) % 1000}.jpg",
-                )
-                if not cv2.imwrite(filename, frame):
-                    print(f"[Loi] Khong luu duoc snapshot: {filename}")
+                if now - getattr(main, "_last_snapshot_time", 0.0) >= 2.0:
+                    timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+                    filename = os.path.join(
+                        config.SNAPSHOT_DIR,
+                        f"alert_{timestamp_str}_{int(now * 1000) % 1000}.jpg",
+                    )
+                    if not cv2.imwrite(filename, frame):
+                        print(f"[Loi] Khong luu duoc snapshot: {filename}")
+                    main._last_snapshot_time = now
 
             elapsed = time.time() - fps_start_time
             if elapsed >= 1.0:
@@ -132,6 +156,13 @@ def main():
                     else:
                         detections_to_draw = []
 
+                    notifier.update_runtime_context(
+                        frame,
+                        detections_to_draw,
+                        fps=cam_fps,
+                        ai_fps=ai_fps,
+                        confirmed_fire=is_fire_confirmed,
+                    )
                     display_frame = display.draw_overlay(
                         frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps
                     )

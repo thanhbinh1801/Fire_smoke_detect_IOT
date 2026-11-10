@@ -11,6 +11,7 @@ from flask import Flask, Response, jsonify, render_template, request
 import config
 import display
 from actuators import CameraServo, WaterPump
+from notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class FireMonitor:
         self._servo = None
         self._pump = None
         self._last_control_at = time.monotonic()
+        self._notifier = TelegramNotifier()
         self._state = {
             "status": "starting",
             "error": None,
@@ -35,6 +37,7 @@ class FireMonitor:
             "ai_fps": 0.0,
             "fire_detected": False,
             "detections": [],
+            "telegram": self._notifier.get_status(),
             "updated_at": None,
         }
         self._jpeg = None
@@ -104,6 +107,7 @@ class FireMonitor:
             last_camera_frame_time = 0.0
             last_fire_time = 0.0
             confirmed_fire = False
+            smoke_votes = 0
             cached_detections = []
             watchdog_seconds = float(
                 getattr(config, "ACTUATOR_WATCHDOG_SECONDS", 600.0)
@@ -139,6 +143,10 @@ class FireMonitor:
                     detection for detection in detections
                     if detection.get("label") == "fire"
                 ]
+                smoke_detections = [
+                    detection for detection in detections
+                    if detection.get("label") == "smoke"
+                ]
 
                 has_new_result = bool(result_time and result_time != last_result_time)
                 if has_new_result:
@@ -146,12 +154,35 @@ class FireMonitor:
                     if fire_detections:
                         last_fire_time = now
                         cached_detections = detections
-                    elif detections:
-                        cached_detections = detections
 
                 confirmed_fire = alarm_confirmer.update(
                     detections, now=now, result_time=result_time
                 )
+                if has_new_result:
+                    if confirmed_fire and fire_detections:
+                        self._notifier.notify(
+                            "fire",
+                            frame,
+                            detections,
+                            fps=camera_fps,
+                            ai_fps=ai_fps,
+                        )
+                    if smoke_detections:
+                        smoke_votes += 1
+                        required_smoke_votes = max(
+                            1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2))
+                        )
+                        if smoke_votes >= required_smoke_votes and not confirmed_fire:
+                            self._notifier.notify(
+                                "smoke",
+                                frame,
+                                detections,
+                                fps=camera_fps,
+                                ai_fps=ai_fps,
+                            )
+                    else:
+                        smoke_votes = 0
+
                 if not confirmed_fire and not detections:
                     cached_detections = []
 
@@ -176,14 +207,17 @@ class FireMonitor:
                         watchdog_seconds,
                     )
 
-                if config.SAVE_SNAPSHOT and has_new_result and fire_detections:
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    filename = os.path.join(
-                        config.SNAPSHOT_DIR,
-                        f"alert_{timestamp}_{int(now * 1000) % 1000}.jpg",
-                    )
-                    if not cv2.imwrite(filename, frame):
-                        logger.error("Không lưu được ảnh cảnh báo: %s", filename)
+                if config.SAVE_SNAPSHOT and confirmed_fire and fire_detections:
+                    last_snap = getattr(self, "_last_snapshot_time", 0.0)
+                    if now - last_snap >= 2.0:
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        filename = os.path.join(
+                            config.SNAPSHOT_DIR,
+                            f"alert_{timestamp}_{int(now * 1000) % 1000}.jpg",
+                        )
+                        if not cv2.imwrite(filename, frame):
+                            logger.error("Không lưu được ảnh cảnh báo: %s", filename)
+                        self._last_snapshot_time = now
 
                 elapsed = time.monotonic() - fps_started
                 if elapsed >= 1.0:
@@ -200,6 +234,13 @@ class FireMonitor:
                 else:
                     display_detections = []
 
+                self._notifier.update_runtime_context(
+                    frame,
+                    display_detections,
+                    fps=camera_fps,
+                    ai_fps=ai_fps,
+                    confirmed_fire=confirmed_fire,
+                )
                 self._update_state(
                     camera_fps=round(camera_fps, 1),
                     ai_fps=round(ai_fps, 1),
@@ -216,6 +257,7 @@ class FireMonitor:
                     servo=servo.get_state(),
                     pump=pump.get_state(),
                     auto_armed=pump.is_armed(),
+                    telegram=self._notifier.get_status(),
                     updated_at=now,
                 )
 
@@ -291,7 +333,16 @@ class FireMonitor:
             }
         )
         state["auto_armed"] = bool(pump.is_armed()) if pump is not None else False
+        state["telegram"] = self._notifier.get_status()
         return state
+
+    def test_telegram(self):
+        with self._lock:
+            camera = self._camera
+            fps = self._state.get("camera_fps")
+            ai_fps = self._state.get("ai_fps")
+        frame = camera.get_frame() if camera is not None else None
+        return self._notifier.send_test(frame=frame, fps=fps, ai_fps=ai_fps)
 
     def servo_action(self, payload):
         action = str((payload or {}).get("action", "")).strip().lower()
@@ -456,6 +507,11 @@ def create_app(monitor=None):
             jsonify({"ok": ok, "message": message, "auto_armed": enabled}),
             (200 if ok else 400),
         )
+
+    @app.post("/api/telegram/test")
+    def telegram_test():
+        ok, message = app.monitor.test_telegram()
+        return jsonify({"ok": ok, "message": message}), (200 if ok else 400)
 
     @app.post("/api/restart")
     def restart():

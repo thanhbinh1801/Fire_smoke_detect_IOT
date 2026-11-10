@@ -327,6 +327,10 @@
               </button>
               <button class="control-button" data-action="focus_far">Nét xa <kbd>[</kbd></button>
               <button class="control-button" data-action="focus_near">Nét gần <kbd>]</kbd></button>
+              <button class="control-button" id="telegram-test" style="grid-column: 1 / -1;" title="Gửi tin nhắn và ảnh kiểm tra về Telegram">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m21 3-9.5 18-2.8-7.7L1 10.5 21 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+                <span id="telegram-test-label">Gửi thử cảnh báo Telegram</span>
+              </button>
             </div>
           </div>
         </section>
@@ -491,7 +495,15 @@
       setText($("connection-label"), active ? "Đang kết nối" : data.status === "error" ? "Mất kết nối" : "Đang khởi động");
       $("connection-dot").className = `connection-dot${active ? " live" : data.status === "error" ? " offline" : ""}`;
       $("live-label").hidden = !active;
-      $("error").textContent = data.error || data.inference_error || "";
+      $("error").textContent = data.error || data.inference_error || (data.telegram && data.telegram.last_error) || "";
+      if (data.telegram) {
+        const tgBtn = $("telegram-test-label");
+        if (tgBtn && !tgBtn.dataset.busy) {
+          tgBtn.textContent = data.telegram.configured
+            ? "Gửi thử cảnh báo Telegram (Đã kết nối)"
+            : "Gửi thử Telegram (Chưa cấu hình Token/Chat ID)";
+        }
+      }
       $("restart").hidden = data.status !== "error" && data.status !== "stopped";
       $("video-placeholder").hidden = active;
       setText($("placeholder-title"), data.status === "error" ? "Camera chưa sẵn sàng" : "Đang khởi tạo camera");
@@ -583,6 +595,27 @@
     $("auto-arm").addEventListener("click", async () => {
       const result = await postJson("/api/pump/arm", { armed: !autoArmed }, $("auto-arm"));
       if (result) refresh();
+    });
+
+    $("telegram-test").addEventListener("click", async () => {
+      const button = $("telegram-test");
+      const label = $("telegram-test-label");
+      button.disabled = true;
+      label.dataset.busy = "1";
+      label.textContent = "Đang gửi tới Telegram...";
+      try {
+        const response = await fetch("/api/telegram/test", { method: "POST" });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || "Không gửi được Telegram.");
+        setText($("state-copy"), result.message);
+        setText($("error"), "");
+      } catch (error) {
+        setText($("error"), error.message);
+      } finally {
+        delete label.dataset.busy;
+        button.disabled = false;
+        refresh();
+      }
     });
 
     $("restart").addEventListener("click", async () => {
