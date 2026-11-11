@@ -406,7 +406,6 @@ class FireMonitor:
             "autofocus": lambda camera: camera.trigger_autofocus(),
             "focus_near": lambda camera: camera.adjust_focus(+0.2),
             "focus_far": lambda camera: camera.adjust_focus(-0.2),
-            "color": lambda camera: camera.toggle_color_swap(),
         }
         if action not in actions:
             return False, "Thao tác camera không hợp lệ."
@@ -420,8 +419,6 @@ class FireMonitor:
         except Exception as error:
             logger.exception("Không thực hiện được thao tác camera %s", action)
             return False, str(error)
-        if action == "color":
-            return True, f"Đảo kênh màu {'bật' if result else 'tắt'}."
         return True, result if result is not None else "Đã gửi lệnh."
 
     def stream(self):

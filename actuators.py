@@ -10,9 +10,43 @@ Trên laptop, hai lớp này chỉ ghi log để test logic mà không cần ph�
 
 import threading
 import time
+import types
 from collections import deque
 
 import config
+
+
+def _patch_lgpio_pwm_pin(servo_device):
+    try:
+        import lgpio
+    except ImportError:
+        return
+    pin = getattr(getattr(servo_device, "pwm_device", None), "pin", None)
+    if pin is None or not hasattr(pin, "_pwm") or not hasattr(pin, "factory"):
+        return
+    if not hasattr(pin.factory, "_handle"):
+        return
+
+    def _float_set_state(self, value):
+        if self._pwm:
+            freq, _ = self._pwm
+            duty = round(float(value) * 100.0, 4)
+            self._pwm = (freq, duty)
+            lgpio.tx_pwm(self.factory._handle, self._number, freq, duty)
+        else:
+            lgpio.gpio_write(self.factory._handle, self._number, bool(value))
+
+    def _smart_set_frequency(self, value):
+        if value is None or value == 0:
+            if self._pwm:
+                lgpio.tx_pwm(self.factory._handle, self._number, 0, 0)
+                self._pwm = None
+        else:
+            prev_duty = self._pwm[1] if self._pwm else 0.0
+            self._pwm = (value, prev_duty)
+
+    pin._set_state = types.MethodType(_float_set_state, pin)
+    pin._set_frequency = types.MethodType(_smart_set_frequency, pin)
 
 
 class CameraServo:
@@ -48,6 +82,8 @@ class CameraServo:
                     getattr(config, "SERVO_MAX_PULSE_WIDTH", 0.0024)
                 ),
             )
+            _patch_lgpio_pwm_pin(self._servo)
+            self._servo.angle = self._angle
             with self._lock:
                 self._schedule_detach_locked()
             print(

@@ -35,9 +35,9 @@ WEBCAM_INDEX = 0
 # Định dạng ưu tiên cho webcam USB. MJPG cần thiết để đạt 30 FPS ở 640x480
 # trên Raspberry Pi; nếu camera không hỗ trợ, OpenCV sẽ tự fallback.
 WEBCAM_FOURCC = "MJPG"
-USB_LOCK_EXPOSURE = True
-USB_EXPOSURE_TIME = 200
-USB_BACKLIGHT_COMPENSATION = 0
+USB_LOCK_EXPOSURE = False
+USB_EXPOSURE_TIME = 300
+USB_BACKLIGHT_COMPENSATION = 1
 
 # --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
 # Bật lấy nét tự động liên tục (Continuous AF: AfMode=2)
@@ -59,9 +59,6 @@ CAMERA_LENS_POSITION = 2.5
 
 # Bù trừ phơi sáng (Exposure Value) cho IMX519 (-0.5 giúp giảm chói lóa từ ngọn lửa/màn hình điện thoại)
 CAMERA_EXPOSURE_COMP = -0.5
-
-# Đảo kênh màu R-B (False = mặc định BGR chuẩn OpenCV). Có thể bấm 'c' khi đang chạy.
-CAMERA_SWAP_RB = False
 
 # Tốc độ khung hình mong muốn cho camera (30 FPS)
 CAMERA_FPS = 30
@@ -118,10 +115,10 @@ SERVO_PIN = 18
 SERVO_MIN_ANGLE = 30.0
 SERVO_MAX_ANGLE = 150.0
 SERVO_CENTER_ANGLE = 90.0
-SERVO_STEP_ANGLE = 10.0
+SERVO_STEP_ANGLE = 15.0
 SERVO_MIN_PULSE_WIDTH = 0.0005
 SERVO_MAX_PULSE_WIDTH = 0.0024
-SERVO_SETTLE_SECONDS = 0.6
+SERVO_SETTLE_SECONDS = 0.8
 
 PUMP_PIN = 23
 PUMP_ACTIVE_HIGH = True

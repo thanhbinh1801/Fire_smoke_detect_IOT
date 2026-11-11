@@ -29,7 +29,6 @@ class FireCamera:
         self.frame_updated_at = 0.0
         self.lock = threading.Lock()
         self.lens_position = getattr(config, "CAMERA_LENS_POSITION", 2.0)
-        self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
 
         if self.source == "csi":
             if self.platform != "pi":
@@ -142,10 +141,10 @@ class FireCamera:
 
     def _apply_usb_exposure(self):
         try:
-            backlight = int(getattr(config, "USB_BACKLIGHT_COMPENSATION", 0))
+            backlight = int(getattr(config, "USB_BACKLIGHT_COMPENSATION", 1))
             self.cap.set(cv2.CAP_PROP_BACKLIGHT, backlight)
-            if bool(getattr(config, "USB_LOCK_EXPOSURE", True)):
-                exposure_time = int(getattr(config, "USB_EXPOSURE_TIME", 200))
+            if bool(getattr(config, "USB_LOCK_EXPOSURE", False)):
+                exposure_time = int(getattr(config, "USB_EXPOSURE_TIME", 300))
                 self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
                 self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time)
                 print(
@@ -153,6 +152,7 @@ class FireCamera:
                 )
             else:
                 self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+                print("[Camera] USB bật phơi sáng tự động (auto_exposure=3).")
         except Exception as error:
             print(f"[Camera] Cảnh báo cấu hình phơi sáng USB: {error}")
 
@@ -187,30 +187,18 @@ class FireCamera:
             print(f"[Camera] Lỗi Focus: {error}")
             return f"Không chỉnh được tiêu cự: {error}"
 
-    def toggle_color_swap(self):
-        """Đảo kênh màu R-B trực tiếp khi đang chạy."""
-        self.swap_rb = not self.swap_rb
-        mode = "ĐẢO KÊNH R-B" if self.swap_rb else "MẶC ĐỊNH"
-        print(f"\n[Camera] Đã chuyển chế độ màu: {mode}.")
-        return self.swap_rb
-
     def _capture_worker(self):
         """Luồng đọc liên tục khung hình từ camera ở background."""
         while self.running:
             try:
                 if self.source == "csi":
-                    base_bgr = self.picam2.capture_array()
+                    current_frame = self.picam2.capture_array()
                 else:
                     ok, raw = self.cap.read()
                     if not ok:
                         time.sleep(0.01)
                         continue
-                    base_bgr = raw
-
-                if self.swap_rb:
-                    current_frame = cv2.cvtColor(base_bgr, cv2.COLOR_BGR2RGB)
-                else:
-                    current_frame = base_bgr
+                    current_frame = raw
 
                 with self.lock:
                     self.frame = current_frame
