@@ -23,7 +23,9 @@ class FireSmokeDetector:
         print(f"[Detector] Dang nap model ONNX: {self.model_path} ...")
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        opts.intra_op_num_threads = 3  # Dùng 3 cores cho AI, để 1 core cho Camera, GUI và OS
+        opts.intra_op_num_threads = max(
+            1, int(getattr(config, "ORT_INTRA_OP_THREADS", 3))
+        )
         self.session = ort.InferenceSession(
             self.model_path,
             sess_options=opts,
@@ -49,6 +51,11 @@ class FireSmokeDetector:
         self.names = self._load_class_names()
         self.conf_threshold = getattr(config, "CONFIDENCE_THRESHOLD", 0.35)
         self.iou_threshold = getattr(config, "IOU_THRESHOLD", 0.45)
+        self.roi_zoom_enabled = bool(getattr(config, "ROI_ZOOM_ENABLED", True))
+        self.roi_candidate_threshold = float(
+            getattr(config, "ROI_CANDIDATE_THRESHOLD", 0.22)
+        )
+        self.roi_max_box_ratio = float(getattr(config, "ROI_MAX_BOX_RATIO", 0.45))
 
         print(f"[Detector] Nap thanh cong ONNX model. Kich thuoc input: ({self.input_w}x{self.input_h})")
         print(f"[Detector] Nhan ho tro: {self.names} | Nguong confidence: {self.conf_threshold}")
@@ -80,11 +87,20 @@ class FireSmokeDetector:
         scale = min(self.input_w / orig_w, self.input_h / orig_h)
         resized_w = max(1, int(round(orig_w * scale)))
         resized_h = max(1, int(round(orig_h * scale)))
-        resized = cv2.resize(frame, (resized_w, resized_h))
         pad_x = (self.input_w - resized_w) // 2
         pad_y = (self.input_h - resized_h) // 2
-        model_frame = np.full((self.input_h, self.input_w, 3), 114, dtype=np.uint8)
-        model_frame[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
+        if (
+            resized_w == orig_w
+            and resized_h == orig_h
+            and orig_w == self.input_w
+            and orig_h == self.input_h
+        ):
+            model_frame = frame
+        else:
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            resized = cv2.resize(frame, (resized_w, resized_h), interpolation=interp)
+            model_frame = np.full((self.input_h, self.input_w, 3), 114, dtype=np.uint8)
+            model_frame[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
         blob = cv2.dnn.blobFromImage(
             model_frame,
             scalefactor=1.0 / 255.0,
@@ -97,7 +113,10 @@ class FireSmokeDetector:
     def infer(self, blob):
         return self.session.run([self.output_name], {self.input_name: blob})
 
-    def postprocess(self, outputs, meta):
+    def postprocess(self, outputs, meta, conf_threshold=None):
+        threshold = (
+            self.conf_threshold if conf_threshold is None else float(conf_threshold)
+        )
         orig_h, orig_w, scale, pad_x, pad_y = meta
         preds = np.asarray(outputs[0])
         if preds.ndim == 3:
@@ -116,7 +135,7 @@ class FireSmokeDetector:
         class_ids = np.argmax(scores_matrix, axis=1)
         confidences = np.max(scores_matrix, axis=1)
 
-        mask = confidences >= self.conf_threshold
+        mask = confidences >= threshold
         if not np.any(mask):
             return []
 
@@ -143,7 +162,7 @@ class FireSmokeDetector:
             indices = cv2.dnn.NMSBoxes(
                 [boxes_for_nms[i] for i in class_indices],
                 [conf_list[i] for i in class_indices],
-                self.conf_threshold,
+                threshold,
                 self.iou_threshold,
             )
             for class_index in np.asarray(indices).flatten():
@@ -169,10 +188,98 @@ class FireSmokeDetector:
 
         return sorted(detections, key=lambda detection: detection["conf"], reverse=True)
 
+    @staticmethod
+    def _box_iou(box_a, box_b):
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        if inter_area <= 0:
+            return 0.0
+        area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+        area_b = max(1, (bx2 - bx1) * (by2 - by1))
+        return inter_area / float(area_a + area_b - inter_area)
+
+    def _detect_roi_zoom(self, frame, outputs, meta, primary_detections):
+        orig_h, orig_w = frame.shape[:2]
+        if orig_w <= self.input_w and orig_h <= self.input_h:
+            return primary_detections
+        if self.roi_candidate_threshold >= self.conf_threshold:
+            return primary_detections
+
+        candidates = self.postprocess(
+            outputs, meta, conf_threshold=self.roi_candidate_threshold
+        )
+        max_w = orig_w * self.roi_max_box_ratio
+        max_h = orig_h * self.roi_max_box_ratio
+        weak_candidates = [
+            det
+            for det in candidates
+            if det["conf"] < self.conf_threshold
+            and (det["box"][2] - det["box"][0]) <= max_w
+            and (det["box"][3] - det["box"][1]) <= max_h
+        ]
+        if not weak_candidates:
+            return primary_detections
+
+        best = weak_candidates[0]
+        bx1, by1, bx2, by2 = best["box"]
+        cx = (bx1 + bx2) // 2
+        cy = (by1 + by2) // 2
+        crop_w = min(orig_w, self.input_w)
+        crop_h = min(orig_h, self.input_h)
+        crop_x1 = max(0, min(orig_w - crop_w, cx - crop_w // 2))
+        crop_y1 = max(0, min(orig_h - crop_h, cy - crop_h // 2))
+        roi_frame = frame[crop_y1:crop_y1 + crop_h, crop_x1:crop_x1 + crop_w]
+
+        roi_blob, roi_meta = self.preprocess(roi_frame)
+        roi_outputs = self.infer(roi_blob)
+        roi_detections = self.postprocess(roi_outputs, roi_meta)
+        if not roi_detections:
+            return primary_detections
+
+        merged = list(primary_detections)
+        for det in roi_detections:
+            rx1, ry1, rx2, ry2 = det["box"]
+            mapped_box = (
+                max(0, min(orig_w - 1, rx1 + crop_x1)),
+                max(0, min(orig_h - 1, ry1 + crop_y1)),
+                max(0, min(orig_w - 1, rx2 + crop_x1)),
+                max(0, min(orig_h - 1, ry2 + crop_y1)),
+            )
+            mapped_det = {
+                "label": det["label"],
+                "conf": det["conf"],
+                "box": mapped_box,
+            }
+            replaced = False
+            for idx, existing in enumerate(merged):
+                if (
+                    existing["label"] == mapped_det["label"]
+                    and self._box_iou(existing["box"], mapped_box) >= self.iou_threshold
+                ):
+                    if mapped_det["conf"] > existing["conf"]:
+                        merged[idx] = mapped_det
+                    replaced = True
+                    break
+            if not replaced:
+                merged.append(mapped_det)
+
+        return sorted(merged, key=lambda item: item["conf"], reverse=True)
+
     def detect(self, frame):
         blob, meta = self.preprocess(frame)
         outputs = self.infer(blob)
-        return self.postprocess(outputs, meta)
+        detections = self.postprocess(outputs, meta)
+        has_confident_fire = any(det.get("label") == "fire" for det in detections)
+        if self.roi_zoom_enabled and not has_confident_fire:
+            detections = self._detect_roi_zoom(frame, outputs, meta, detections)
+        return detections
 
 
 class AsyncFireDetector:

@@ -31,6 +31,7 @@ class CameraServo:
         self._angle = self._clamp(self.center_angle)
         self._servo = None
         self._detach_timer = None
+        self._moving_until = 0.0
 
         if self.platform == "pi":
             from gpiozero import AngularServo
@@ -82,6 +83,8 @@ class CameraServo:
         value = self._clamp(angle)
         with self._lock:
             self._angle = value
+            if self.settle_seconds > 0.0:
+                self._moving_until = time.monotonic() + self.settle_seconds
             if self._servo is not None:
                 try:
                     self._servo.angle = value
@@ -91,6 +94,10 @@ class CameraServo:
                     return None
         print(f"[Servo] Góc hiện tại: {value:.0f}°")
         return value
+
+    def is_moving(self):
+        with self._lock:
+            return time.monotonic() < self._moving_until
 
     def step(self, direction):
         """Quay tương đối: direction > 0 sang phải, < 0 sang trái."""
@@ -111,6 +118,7 @@ class CameraServo:
             "min_angle": self.min_angle,
             "max_angle": self.max_angle,
             "center_angle": self.center_angle,
+            "moving": self.is_moving(),
             "available": self.platform == "pi",
         }
 

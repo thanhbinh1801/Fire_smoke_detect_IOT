@@ -127,11 +127,13 @@ class FireMonitor:
                 ):
                     raise RuntimeError("Camera không cung cấp frame mới quá thời gian cho phép.")
 
+                servo_moving = servo.is_moving()
                 has_new_frame = new_frame is not None
                 if has_new_frame:
                     frame = new_frame
                     last_camera_frame_time = frame_time
-                    async_detector.update_frame(frame)
+                    if not servo_moving:
+                        async_detector.update_frame(frame)
                     frame_count += 1
                 if frame is None:
                     self._stop_event.wait(0.005)
@@ -151,48 +153,52 @@ class FireMonitor:
                 has_new_result = bool(result_time and result_time != last_result_time)
                 if has_new_result:
                     last_result_time = result_time
-                    if fire_detections:
-                        last_fire_time = now
-                        cached_detections = detections
+                    if not servo_moving:
+                        if fire_detections:
+                            last_fire_time = now
+                            cached_detections = detections
+                        elif detections:
+                            cached_detections = detections
 
-                confirmed_fire = alarm_confirmer.update(
-                    detections, now=now, result_time=result_time
-                )
-                if has_new_result:
-                    if confirmed_fire and fire_detections:
-                        self._notifier.notify(
-                            "fire",
-                            frame,
-                            detections,
-                            fps=camera_fps,
-                            ai_fps=ai_fps,
-                        )
-                    if smoke_detections:
-                        smoke_votes += 1
-                        required_smoke_votes = max(
-                            1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2))
-                        )
-                        if smoke_votes >= required_smoke_votes and not confirmed_fire:
+                if not servo_moving:
+                    confirmed_fire = alarm_confirmer.update(
+                        detections, now=now, result_time=result_time
+                    )
+                    if has_new_result:
+                        if confirmed_fire and fire_detections:
                             self._notifier.notify(
-                                "smoke",
+                                "fire",
                                 frame,
                                 detections,
                                 fps=camera_fps,
                                 ai_fps=ai_fps,
                             )
-                    else:
-                        smoke_votes = 0
+                        if smoke_detections:
+                            smoke_votes += 1
+                            required_smoke_votes = max(
+                                1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2))
+                            )
+                            if smoke_votes >= required_smoke_votes and not confirmed_fire:
+                                self._notifier.notify(
+                                    "smoke",
+                                    frame,
+                                    detections,
+                                    fps=camera_fps,
+                                    ai_fps=ai_fps,
+                                )
+                        else:
+                            smoke_votes = 0
 
-                if not confirmed_fire and not detections:
-                    cached_detections = []
+                    if not confirmed_fire and not detections:
+                        cached_detections = []
 
-                if has_new_result and pump_confirmer.update(
-                    detections, now=now, result_time=result_time
-                ):
-                    ok, message = pump.spray("auto", automatic=True)
-                    if ok:
-                        pump_confirmer.reset()
-                        logger.warning("Phun tự động: %s", message)
+                    if has_new_result and pump_confirmer.update(
+                        detections, now=now, result_time=result_time
+                    ):
+                        ok, message = pump.spray("auto", automatic=True)
+                        if ok:
+                            pump_confirmer.reset()
+                            logger.warning("Phun tự động: %s", message)
 
                 alert.set_fire_led(confirmed_fire)
                 alert.set_buzzer(confirmed_fire)

@@ -10,6 +10,11 @@ MODEL_PATH = "models/fire_smoke_yolov8n.onnx"
 # Ngưỡng độ tin cậy để kích hoạt cảnh báo (0.0 - 1.0)
 CONFIDENCE_THRESHOLD = 0.40
 IOU_THRESHOLD = 0.45
+ORT_INTRA_OP_THREADS = 3
+
+ROI_ZOOM_ENABLED = True
+ROI_CANDIDATE_THRESHOLD = 0.22
+ROI_MAX_BOX_RATIO = 0.45
 
 # Độ phân giải camera dùng cho inference (640x480 giúp cân bằng giữa độ chính xác và tốc độ trên Pi 4)
 FRAME_WIDTH = 640
@@ -30,6 +35,9 @@ WEBCAM_INDEX = 0
 # Định dạng ưu tiên cho webcam USB. MJPG cần thiết để đạt 30 FPS ở 640x480
 # trên Raspberry Pi; nếu camera không hỗ trợ, OpenCV sẽ tự fallback.
 WEBCAM_FOURCC = "MJPG"
+USB_LOCK_EXPOSURE = True
+USB_EXPOSURE_TIME = 200
+USB_BACKLIGHT_COMPENSATION = 0
 
 # --- CẤU HÌNH CAMERA (TỐI ƯU CHO ARDUCAM IMX519) ---
 # Bật lấy nét tự động liên tục (Continuous AF: AfMode=2)

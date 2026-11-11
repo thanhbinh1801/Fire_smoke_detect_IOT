@@ -129,6 +129,8 @@ class FireCamera:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(config.FRAME_HEIGHT))
         self.cap.set(cv2.CAP_PROP_FPS, target_fps)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if sys.platform.startswith("linux"):
+            self._apply_usb_exposure()
 
         actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -137,6 +139,22 @@ class FireCamera:
             f"[Camera] USB webcam index {index} ({fourcc_text or 'default'}) "
             f"{actual_w}x{actual_h} @ {actual_fps:.0f}fps"
         )
+
+    def _apply_usb_exposure(self):
+        try:
+            backlight = int(getattr(config, "USB_BACKLIGHT_COMPENSATION", 0))
+            self.cap.set(cv2.CAP_PROP_BACKLIGHT, backlight)
+            if bool(getattr(config, "USB_LOCK_EXPOSURE", True)):
+                exposure_time = int(getattr(config, "USB_EXPOSURE_TIME", 200))
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time)
+                print(
+                    f"[Camera] USB khóa phơi sáng thủ công (exposure={exposure_time}, backlight={backlight})."
+                )
+            else:
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+        except Exception as error:
+            print(f"[Camera] Cảnh báo cấu hình phơi sáng USB: {error}")
 
     def trigger_autofocus(self):
         """Kích hoạt chu kỳ lấy nét tự động (chỉ có tác dụng với camera CSI)."""
