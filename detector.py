@@ -26,6 +26,7 @@ class FireSmokeDetector:
         opts.intra_op_num_threads = max(
             1, int(getattr(config, "ORT_INTRA_OP_THREADS", 3))
         )
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self.session = ort.InferenceSession(
             self.model_path,
             sess_options=opts,

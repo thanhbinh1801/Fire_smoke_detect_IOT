@@ -55,6 +55,13 @@ class FireMonitor:
             )
             self._thread.start()
 
+    def stop(self):
+        self._stop_event.set()
+        with self._lock:
+            thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3.0)
+
     def _update_state(self, **updates):
         with self._frame_ready:
             self._state.update(updates)
@@ -267,7 +274,7 @@ class FireMonitor:
                     updated_at=now,
                 )
 
-                if time.monotonic() >= next_stream_at:
+                if not servo_moving and time.monotonic() >= next_stream_at:
                     overlay = display.draw_overlay(
                         frame, display_detections, fps=camera_fps, ai_fps=ai_fps
                     )
@@ -530,13 +537,18 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     app = create_app()
-    app.run(
-        host=getattr(config, "WEB_HOST", "127.0.0.1"),
-        port=int(getattr(config, "WEB_PORT", 5000)),
-        threaded=True,
-        debug=False,
-        use_reloader=False,
-    )
+    try:
+        app.run(
+            host=getattr(config, "WEB_HOST", "127.0.0.1"),
+            port=int(getattr(config, "WEB_PORT", 5000)),
+            threaded=True,
+            debug=False,
+            use_reloader=False,
+        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        app.monitor.stop()
 
 
 if __name__ == "__main__":

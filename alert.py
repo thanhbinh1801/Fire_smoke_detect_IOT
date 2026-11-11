@@ -56,10 +56,15 @@ class AlertSystem:
     def _sound_off(self):
         """Tắt còi"""
         if self.platform == "pi":
-            if self.mode == "pwm":
-                self.buzzer.value = 0.0
-            else:
-                self.buzzer.off()
+            try:
+                if getattr(self.buzzer, "pin", None) is None:
+                    return
+                if self.mode == "pwm":
+                    self.buzzer.value = 0.0
+                else:
+                    self.buzzer.off()
+            except Exception:
+                pass
 
     def _led_on(self):
         """Bật đèn cảnh báo lửa"""
@@ -107,10 +112,14 @@ class AlertSystem:
 
                 if self.platform == "pi" and self.mode == "pwm":
                     try:
+                        if getattr(self.buzzer, "pin", None) is None:
+                            self._should_buzz = False
+                            break
                         self.buzzer.frequency = int(frequency)
                         self.buzzer.value = max(0.0, volume)
                     except Exception as error:
-                        print(f"[Cảnh báo] Lỗi điều khiển buzzer: {error}")
+                        if self._should_buzz and getattr(self.buzzer, "pin", None) is not None:
+                            print(f"[Cảnh báo] Lỗi điều khiển buzzer: {error}")
                         self._should_buzz = False
                         break
                 elif self.platform == "pi":

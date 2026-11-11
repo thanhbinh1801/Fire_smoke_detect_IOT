@@ -8,12 +8,75 @@
 Trên laptop, hai lớp này chỉ ghi log để test logic mà không cần phần cứng.
 """
 
+import os
 import threading
 import time
 import types
 from collections import deque
 
 import config
+
+
+class _SysfsPWMServo:
+    def __init__(self, pin, min_pulse_width=0.0005, max_pulse_width=0.0024, frame_width=0.02):
+        self.pin = int(pin)
+        chips = sorted(
+            (f"/sys/class/pwm/{name}" for name in os.listdir("/sys/class/pwm") if name.startswith("pwmchip")),
+            key=lambda path: int(path.rsplit("pwmchip", 1)[1]),
+        )
+        if not chips:
+            raise RuntimeError("Kernel PWM chưa được bật; không tìm thấy pwmchip")
+        self.chip_path = chips[0]
+        if os.path.realpath(os.path.join(self.chip_path, "device", "driver")).endswith("/pwm-gpio") and self.pin != 18:
+            raise RuntimeError("pwm-gpio hiện được cấu hình cho GPIO18")
+        self.channel = 0
+        self.pwm_path = f"{self.chip_path}/pwm{self.channel}"
+        self.min_pw = float(min_pulse_width)
+        self.max_pw = float(max_pulse_width)
+        self.period_ns = int(round(float(frame_width) * 1_000_000_000))
+        self._angle = None
+
+        if not os.path.isdir(self.pwm_path):
+            with open(f"{self.chip_path}/export", "w", encoding="utf-8") as f:
+                f.write(str(self.channel))
+            for _ in range(20):
+                if os.path.isdir(self.pwm_path):
+                    break
+                time.sleep(0.01)
+
+        with open(f"{self.pwm_path}/enable", "w", encoding="utf-8") as f:
+            f.write("0")
+        with open(f"{self.pwm_path}/period", "w", encoding="utf-8") as f:
+            f.write(str(self.period_ns))
+
+    @property
+    def angle(self):
+        return self._angle
+
+    @angle.setter
+    def angle(self, value):
+        if value is None:
+            self.detach()
+            return
+        ratio = max(0.0, min(1.0, float(value) / 180.0))
+        pulse_s = self.min_pw + ratio * (self.max_pw - self.min_pw)
+        duty_ns = int(round(pulse_s * 1_000_000_000))
+        with open(f"{self.pwm_path}/duty_cycle", "w", encoding="utf-8") as f:
+            f.write(str(duty_ns))
+        with open(f"{self.pwm_path}/enable", "w", encoding="utf-8") as f:
+            f.write("1")
+        self._angle = float(value)
+
+    def detach(self):
+        try:
+            with open(f"{self.pwm_path}/enable", "w", encoding="utf-8") as f:
+                f.write("0")
+        except Exception:
+            pass
+        self._angle = None
+
+    def close(self):
+        self.detach()
 
 
 def _patch_lgpio_pwm_pin(servo_device):
@@ -29,20 +92,27 @@ def _patch_lgpio_pwm_pin(servo_device):
 
     def _float_set_state(self, value):
         if self._pwm:
-            freq, _ = self._pwm
+            freq, prev_duty = self._pwm
             duty = round(float(value) * 100.0, 4)
-            self._pwm = (freq, duty)
-            lgpio.tx_pwm(self.factory._handle, self._number, freq, duty)
+            if duty != prev_duty or not getattr(self, "_pwm_active", False):
+                self._pwm = (freq, duty)
+                self._pwm_active = True
+                lgpio.tx_pwm(self.factory._handle, self._number, freq, duty)
         else:
+            self._pwm_active = False
             lgpio.gpio_write(self.factory._handle, self._number, bool(value))
 
     def _smart_set_frequency(self, value):
         if value is None or value == 0:
             if self._pwm:
                 lgpio.tx_pwm(self.factory._handle, self._number, 0, 0)
+                lgpio.gpio_write(self.factory._handle, self._number, 0)
                 self._pwm = None
+                self._pwm_active = False
         else:
             prev_duty = self._pwm[1] if self._pwm else 0.0
+            if not self._pwm:
+                self._pwm_active = False
             self._pwm = (value, prev_duty)
 
     pin._set_state = types.MethodType(_float_set_state, pin)
@@ -68,26 +138,42 @@ class CameraServo:
         self._moving_until = 0.0
 
         if self.platform == "pi":
-            from gpiozero import AngularServo
+            min_pw = float(getattr(config, "SERVO_MIN_PULSE_WIDTH", 0.0005))
+            max_pw = float(getattr(config, "SERVO_MAX_PULSE_WIDTH", 0.0024))
+            if os.path.isdir("/sys/class/pwm/pwmchip0") and int(config.SERVO_PIN) in (
+                12,
+                13,
+                18,
+                19,
+            ):
+                try:
+                    self._servo = _SysfsPWMServo(
+                        config.SERVO_PIN,
+                        min_pulse_width=min_pw,
+                        max_pulse_width=max_pw,
+                    )
+                    self._servo.angle = self._angle
+                    pwm_mode = "hardware/kernel PWM"
+                except Exception:
+                    self._servo = None
+            if self._servo is None:
+                from gpiozero import AngularServo
 
-            self._servo = AngularServo(
-                config.SERVO_PIN,
-                initial_angle=self._angle,
-                min_angle=0.0,
-                max_angle=180.0,
-                min_pulse_width=float(
-                    getattr(config, "SERVO_MIN_PULSE_WIDTH", 0.0005)
-                ),
-                max_pulse_width=float(
-                    getattr(config, "SERVO_MAX_PULSE_WIDTH", 0.0024)
-                ),
-            )
-            _patch_lgpio_pwm_pin(self._servo)
-            self._servo.angle = self._angle
+                self._servo = AngularServo(
+                    config.SERVO_PIN,
+                    initial_angle=self._angle,
+                    min_angle=0.0,
+                    max_angle=180.0,
+                    min_pulse_width=min_pw,
+                    max_pulse_width=max_pw,
+                )
+                _patch_lgpio_pwm_pin(self._servo)
+                self._servo.angle = self._angle
+                pwm_mode = "lgpio PWM"
             with self._lock:
                 self._schedule_detach_locked()
             print(
-                f"[Servo] SG90 trên GPIO BCM {config.SERVO_PIN}, "
+                f"[Servo] SG90 trên GPIO BCM {config.SERVO_PIN} ({pwm_mode}), "
                 f"góc {self.min_angle:.0f}-{self.max_angle:.0f}."
             )
         else:
