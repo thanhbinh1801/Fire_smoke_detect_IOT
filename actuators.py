@@ -131,6 +131,7 @@ class CameraServo:
         self.settle_seconds = max(
             0.0, float(getattr(config, "SERVO_SETTLE_SECONDS", 0.6))
         )
+        self.hold_position = bool(getattr(config, "SERVO_HOLD_POSITION", True))
         self._lock = threading.Lock()
         self._angle = self._clamp(self.center_angle)
         self._servo = None
@@ -186,7 +187,11 @@ class CameraServo:
         if self._detach_timer is not None:
             self._detach_timer.cancel()
             self._detach_timer = None
-        if self._servo is not None and self.settle_seconds > 0.0:
+        if (
+            self._servo is not None
+            and not self.hold_position
+            and self.settle_seconds > 0.0
+        ):
             self._detach_timer = threading.Timer(self.settle_seconds, self._detach)
             self._detach_timer.daemon = True
             self._detach_timer.start()
