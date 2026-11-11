@@ -142,17 +142,25 @@ class FireCamera:
     def _apply_usb_exposure(self):
         try:
             backlight = int(getattr(config, "USB_BACKLIGHT_COMPENSATION", 1))
+            gain = int(getattr(config, "USB_GAIN", 32))
+            gamma = int(getattr(config, "USB_GAMMA", 120))
+            exposure_time = int(getattr(config, "USB_EXPOSURE_TIME", 313))
             self.cap.set(cv2.CAP_PROP_BACKLIGHT, backlight)
+            self.cap.set(cv2.CAP_PROP_GAIN, gain)
+            self.cap.set(cv2.CAP_PROP_GAMMA, gamma)
             if bool(getattr(config, "USB_LOCK_EXPOSURE", False)):
-                exposure_time = int(getattr(config, "USB_EXPOSURE_TIME", 300))
                 self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
                 self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time)
                 print(
-                    f"[Camera] USB khóa phơi sáng thủ công (exposure={exposure_time}, backlight={backlight})."
+                    f"[Camera] USB khóa phơi sáng thủ công (exposure={exposure_time}, gain={gain})."
                 )
             else:
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time)
                 self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
-                print("[Camera] USB bật phơi sáng tự động (auto_exposure=3).")
+                print(
+                    f"[Camera] USB bật phơi sáng tự động (auto_exposure=3, gain={gain}, gamma={gamma})."
+                )
         except Exception as error:
             print(f"[Camera] Cảnh báo cấu hình phơi sáng USB: {error}")
 
