@@ -26,20 +26,20 @@ class AlertSystem:
         if self.platform == "pi":
             # 1. Khởi tạo Còi Buzzer
             if getattr(config, "BUZZER_TYPE", "passive") == "passive":
-                from gpiozero import PWMOutputDevice
+                from gpiozero import PWMOutputDevice  # type: ignore[import-not-found]
                 self.buzzer = PWMOutputDevice(
                     pin=config.BUZZER_PIN,
                     frequency=getattr(config, "BUZZER_FREQUENCY", 2000)
                 )
                 self.mode = "pwm"
             else:
-                from gpiozero import Buzzer
+                from gpiozero import Buzzer  # type: ignore[import-not-found]
                 self.buzzer = Buzzer(config.BUZZER_PIN)
                 self.mode = "active"
             print(f"[Cảnh báo] Đã khởi tạo còi ({self.mode}) trên GPIO BCM {config.BUZZER_PIN}")
 
             # 2. Khởi tạo Đèn LED báo cháy (GPIO 27)
-            from gpiozero import LED
+            from gpiozero import LED  # type: ignore[import-not-found]
             self.led = LED(getattr(config, "LED_PIN", 27))
             print(f"[Cảnh báo] Đã khởi tạo đèn LED trên GPIO BCM {getattr(config, 'LED_PIN', 27)}")
         else:

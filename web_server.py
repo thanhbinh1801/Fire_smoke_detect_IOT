@@ -55,10 +55,11 @@ class FireMonitor:
             )
             self._thread.start()
 
-    def _update_state(self, **updates):
+    def _update_state(self, notify_stream: bool = False, **updates):
         with self._frame_ready:
             self._state.update(updates)
-            self._frame_ready.notify_all()
+            if notify_stream or "status" in updates:
+                self._frame_ready.notify_all()
 
     @staticmethod
     def _cleanup(name, resource, method):
@@ -77,7 +78,12 @@ class FireMonitor:
         try:
             from alert import AlertSystem
             from camera import FireCamera
-            from confirmation import build_alarm_confirmer, build_pump_confirmer
+            from confirmation import (
+                AsyncSnapshotSaver,
+                build_alarm_confirmer,
+                build_pump_confirmer,
+                build_smoke_confirmer,
+            )
             from detector import AsyncFireDetector, FireSmokeDetector
 
             camera = FireCamera()
@@ -87,7 +93,9 @@ class FireMonitor:
             servo = CameraServo()
             pump = WaterPump()
             alarm_confirmer = build_alarm_confirmer()
+            smoke_confirmer = build_smoke_confirmer()
             pump_confirmer = build_pump_confirmer()
+            snapshot_saver = AsyncSnapshotSaver()
             with self._lock:
                 self._camera = camera
                 self._servo = servo
@@ -115,23 +123,30 @@ class FireMonitor:
             stream_interval = 1.0 / max(1, int(getattr(config, "WEB_STREAM_FPS", 12)))
             next_stream_at = 0.0
             loop_interval = 1.0 / max(1, int(getattr(config, "CAMERA_FPS", 30)))
+            stale_timeout = float(getattr(config, "CAMERA_STALE_TIMEOUT", 2.0))
+            jpeg_quality = max(
+                30, min(95, int(getattr(config, "WEB_JPEG_QUALITY", 80)))
+            )
+            required_smoke_votes = max(
+                1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2))
+            )
 
             while not self._stop_event.is_set():
                 loop_started = time.monotonic()
-                new_frame, frame_time = camera.get_frame_if_new(last_camera_frame_time)
+                new_frame, frame_time = camera.wait_for_new_frame(
+                    last_camera_frame_time, timeout=0.004, copy=False
+                )
                 if frame_time <= 0.0:
-                    self._stop_event.wait(0.01)
+                    self._stop_event.wait(0.005)
                     continue
-                if time.monotonic() - frame_time > float(
-                    getattr(config, "CAMERA_STALE_TIMEOUT", 2.0)
-                ):
+                if time.monotonic() - frame_time > stale_timeout:
                     raise RuntimeError("Camera không cung cấp frame mới quá thời gian cho phép.")
 
                 has_new_frame = new_frame is not None
                 if has_new_frame:
                     frame = new_frame
                     last_camera_frame_time = frame_time
-                    async_detector.update_frame(frame)
+                    async_detector.update_frame(frame, frame_timestamp=frame_time)
                     frame_count += 1
                 if frame is None:
                     self._stop_event.wait(0.005)
@@ -158,6 +173,12 @@ class FireMonitor:
                 confirmed_fire = alarm_confirmer.update(
                     detections, now=now, result_time=result_time
                 )
+                confirmed_smoke = smoke_confirmer.update(
+                    detections, now=now, result_time=result_time
+                )
+                alert.set_fire_led(confirmed_fire)
+                alert.set_buzzer(confirmed_fire)
+
                 if has_new_result:
                     if confirmed_fire and fire_detections:
                         self._notifier.notify(
@@ -167,12 +188,12 @@ class FireMonitor:
                             fps=camera_fps,
                             ai_fps=ai_fps,
                         )
+                        snapshot_saver.save_if_due(frame, now=now)
                     if smoke_detections:
                         smoke_votes += 1
-                        required_smoke_votes = max(
-                            1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2))
-                        )
-                        if smoke_votes >= required_smoke_votes and not confirmed_fire:
+                        if (
+                            smoke_votes >= required_smoke_votes or confirmed_smoke
+                        ) and not confirmed_fire:
                             self._notifier.notify(
                                 "smoke",
                                 frame,
@@ -194,9 +215,6 @@ class FireMonitor:
                         pump_confirmer.reset()
                         logger.warning("Phun tự động: %s", message)
 
-                alert.set_fire_led(confirmed_fire)
-                alert.set_buzzer(confirmed_fire)
-
                 if (
                     pump.is_armed()
                     and time.monotonic() - self._last_control_at > watchdog_seconds
@@ -206,18 +224,6 @@ class FireMonitor:
                         "Không có điều khiển từ web trong %.0fs - tự disarm phun tự động.",
                         watchdog_seconds,
                     )
-
-                if config.SAVE_SNAPSHOT and confirmed_fire and fire_detections:
-                    last_snap = getattr(self, "_last_snapshot_time", 0.0)
-                    if now - last_snap >= 2.0:
-                        timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        filename = os.path.join(
-                            config.SNAPSHOT_DIR,
-                            f"alert_{timestamp}_{int(now * 1000) % 1000}.jpg",
-                        )
-                        if not cv2.imwrite(filename, frame):
-                            logger.error("Không lưu được ảnh cảnh báo: %s", filename)
-                        self._last_snapshot_time = now
 
                 elapsed = time.monotonic() - fps_started
                 if elapsed >= 1.0:
@@ -266,7 +272,7 @@ class FireMonitor:
                         frame, display_detections, fps=camera_fps, ai_fps=ai_fps
                     )
                     encoded, jpeg = cv2.imencode(
-                        ".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                        ".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
                     )
                     if encoded:
                         with self._frame_ready:

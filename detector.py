@@ -1,18 +1,24 @@
+# detector.py
 """
-Module nhận diện lửa và khói sử dụng ONNX Runtime (YOLOv8n 320x320, letterbox + blobFromImage).
+Module nhận diện lửa và khói sử dụng ONNX Runtime (YOLOv8n, letterbox + blobFromImage).
+Tích hợp pipeline tiền xử lý (FramePreprocessor) và luồng suy luận bất đồng bộ độ trễ thấp.
 """
 
 import ast
 import os
 import threading
 import time
+
 import cv2
 import numpy as np
 import onnxruntime as ort
+
 import config
+from preprocessing import FramePreprocessor
+
 
 class FireSmokeDetector:
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, preprocessor=None):
         self.model_path = model_path or config.MODEL_PATH
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(
@@ -23,11 +29,12 @@ class FireSmokeDetector:
         print(f"[Detector] Dang nap model ONNX: {self.model_path} ...")
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        opts.intra_op_num_threads = 3  # Dùng 3 cores cho AI, để 1 core cho Camera, GUI và OS
+        intra_threads = max(1, int(getattr(config, "ORT_INTRA_THREADS", 3)))
+        opts.intra_op_num_threads = intra_threads
         self.session = ort.InferenceSession(
             self.model_path,
             sess_options=opts,
-            providers=["CPUExecutionProvider"]
+            providers=["CPUExecutionProvider"],
         )
 
         self.input_info = self.session.get_inputs()[0]
@@ -47,14 +54,32 @@ class FireSmokeDetector:
         )
 
         self.names = self._load_class_names()
-        self.conf_threshold = getattr(config, "CONFIDENCE_THRESHOLD", 0.35)
-        self.iou_threshold = getattr(config, "IOU_THRESHOLD", 0.45)
+        self.conf_threshold = float(getattr(config, "CONFIDENCE_THRESHOLD", 0.40))
+        self.fire_conf_threshold = float(
+            getattr(config, "FIRE_CONFIDENCE_THRESHOLD", self.conf_threshold)
+        )
+        self.smoke_conf_threshold = float(
+            getattr(config, "SMOKE_CONFIDENCE_THRESHOLD", self.conf_threshold)
+        )
+        self.iou_threshold = float(getattr(config, "IOU_THRESHOLD", 0.45))
+        self.min_box_area = max(0, int(getattr(config, "MIN_BOX_AREA", 36)))
 
-        print(f"[Detector] Nap thanh cong ONNX model. Kich thuoc input: ({self.input_w}x{self.input_h})")
-        print(f"[Detector] Nhan ho tro: {self.names} | Nguong confidence: {self.conf_threshold}")
+        self.preprocessor = preprocessor or FramePreprocessor(
+            input_w=self.input_w,
+            input_h=self.input_h,
+        )
+
+        print(
+            f"[Detector] Nap thanh cong ONNX model. Kich thuoc input: ({self.input_w}x{self.input_h}) "
+            f"| Threads: {intra_threads}"
+        )
+        print(
+            f"[Detector] Nhan ho tro: {self.names} | "
+            f"Nguong conf (chung/lua/khoi): {self.conf_threshold:.2f}/{self.fire_conf_threshold:.2f}/{self.smoke_conf_threshold:.2f}"
+        )
 
     def _load_class_names(self):
-        """Đọc danh sách nhãn lớp từ metadata của file ONNX nếu có"""
+        """Đọc danh sách nhãn lớp từ metadata của file ONNX nếu có."""
         default_names = {0: "fire", 1: "smoke"}
         metadata = self.session.get_modelmeta().custom_metadata_map
         if "names" not in metadata:
@@ -72,30 +97,27 @@ class FireSmokeDetector:
                 return names
             raise ValueError("metadata names rỗng")
         except (SyntaxError, TypeError, ValueError) as error:
-            print(f"[Detector] Metadata names không hợp lệ ({error}); dùng nhãn mặc định fire/smoke.")
+            print(
+                f"[Detector] Metadata names không hợp lệ ({error}); dùng nhãn mặc định fire/smoke."
+            )
             return default_names
 
     def preprocess(self, frame):
-        orig_h, orig_w = frame.shape[:2]
-        scale = min(self.input_w / orig_w, self.input_h / orig_h)
-        resized_w = max(1, int(round(orig_w * scale)))
-        resized_h = max(1, int(round(orig_h * scale)))
-        resized = cv2.resize(frame, (resized_w, resized_h))
-        pad_x = (self.input_w - resized_w) // 2
-        pad_y = (self.input_h - resized_h) // 2
-        model_frame = np.full((self.input_h, self.input_w, 3), 114, dtype=np.uint8)
-        model_frame[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
-        blob = cv2.dnn.blobFromImage(
-            model_frame,
-            scalefactor=1.0 / 255.0,
-            size=(self.input_w, self.input_h),
-            swapRB=True,
-            crop=False,
-        )
-        return blob, (orig_h, orig_w, scale, pad_x, pad_y)
+        """Tiền xử lý khung hình qua FramePreprocessor (Letterbox + Enhance + NCHW Blob)."""
+        return self.preprocessor.preprocess(frame)
 
     def infer(self, blob):
         return self.session.run([self.output_name], {self.input_name: blob})
+
+    def _get_class_threshold(self, is_fire: bool, is_smoke: bool) -> float:
+        # Nếu người dùng đặt CONFIDENCE_THRESHOLD trực tiếp trên instance detector,
+        # ưu tiên dùng self.conf_threshold nếu cấu hình riêng không thấp/cao hơn mặc định
+        base = float(self.conf_threshold)
+        if is_fire:
+            return float(getattr(self, "fire_conf_threshold", base))
+        if is_smoke:
+            return float(getattr(self, "smoke_conf_threshold", base))
+        return base
 
     def postprocess(self, outputs, meta):
         orig_h, orig_w, scale, pad_x, pad_y = meta
@@ -116,7 +138,12 @@ class FireSmokeDetector:
         class_ids = np.argmax(scores_matrix, axis=1)
         confidences = np.max(scores_matrix, axis=1)
 
-        mask = confidences >= self.conf_threshold
+        min_threshold = min(
+            float(self.conf_threshold),
+            float(getattr(self, "fire_conf_threshold", self.conf_threshold)),
+            float(getattr(self, "smoke_conf_threshold", self.conf_threshold)),
+        )
+        mask = confidences >= min_threshold
         if not np.any(mask):
             return []
 
@@ -129,8 +156,8 @@ class FireSmokeDetector:
         w = filtered_preds[:, 2]
         h = filtered_preds[:, 3]
 
-        x1 = ((cx - w / 2.0 - pad_x) / scale)
-        y1 = ((cy - h / 2.0 - pad_y) / scale)
+        x1 = (cx - w / 2.0 - pad_x) / scale
+        y1 = (cy - h / 2.0 - pad_y) / scale
         w_scaled = w / scale
         h_scaled = h / scale
 
@@ -138,34 +165,53 @@ class FireSmokeDetector:
         conf_list = filtered_conf.astype(float).tolist()
         cls_list = filtered_cls.astype(int).tolist()
         detections = []
+
         for cls_id in set(cls_list):
-            class_indices = [i for i, value in enumerate(cls_list) if value == cls_id]
+            label = self.names.get(cls_id, f"class_{cls_id}")
+            normalized_label = str(label).strip().lower()
+            is_fire = "fire" in normalized_label or "flame" in normalized_label
+            is_smoke = "smoke" in normalized_label
+            if not is_fire and not is_smoke:
+                continue
+
+            cls_threshold = self._get_class_threshold(is_fire, is_smoke)
+            class_indices = [
+                i
+                for i, value in enumerate(cls_list)
+                if value == cls_id and conf_list[i] >= cls_threshold
+            ]
+            if not class_indices:
+                continue
+
             indices = cv2.dnn.NMSBoxes(
                 [boxes_for_nms[i] for i in class_indices],
                 [conf_list[i] for i in class_indices],
-                self.conf_threshold,
+                cls_threshold,
                 self.iou_threshold,
             )
             for class_index in np.asarray(indices).flatten():
                 idx = class_indices[int(class_index)]
-                label = self.names.get(cls_id, f"class_{cls_id}")
                 conf = conf_list[idx]
-                normalized_label = str(label).strip().lower()
-                is_fire = "fire" in normalized_label or "flame" in normalized_label
-                is_smoke = "smoke" in normalized_label
-                if not is_fire and not is_smoke:
-                    continue
                 bx, by, bw, bh = boxes_for_nms[idx]
                 xmin = max(0, min(orig_w - 1, bx))
                 ymin = max(0, min(orig_h - 1, by))
                 xmax = max(0, min(orig_w - 1, bx + bw))
                 ymax = max(0, min(orig_h - 1, by + bh))
 
-                detections.append({
-                    "label": "fire" if is_fire else "smoke",
-                    "conf": float(conf),
-                    "box": (int(xmin), int(ymin), int(xmax), int(ymax))
-                })
+                box_w = xmax - xmin
+                box_h = ymax - ymin
+                if box_w <= 0 or box_h <= 0:
+                    continue
+                if self.min_box_area > 0 and (box_w * box_h) < self.min_box_area:
+                    continue
+
+                detections.append(
+                    {
+                        "label": "fire" if is_fire else "smoke",
+                        "conf": float(conf),
+                        "box": (int(xmin), int(ymin), int(xmax), int(ymax)),
+                    }
+                )
 
         return sorted(detections, key=lambda detection: detection["conf"], reverse=True)
 
@@ -177,69 +223,117 @@ class FireSmokeDetector:
 
 class AsyncFireDetector:
     """
-    Bộ chạy nhận diện bất đồng bộ (Asynchronous Worker):
-    - Đưa việc suy luận ONNX vào 1 luồng ngầm chuyên biệt.
-    - Giúp luồng chính của Camera/Display luôn đạt 25 - 30 FPS mượt mà.
-    - Không bao giờ làm đứng hình hoặc giật camera khi AI đang tính toán.
+    Bộ chạy nhận diện bất đồng bộ (Asynchronous Worker) tối ưu độ trễ thấp:
+    - Cơ chế Latest-Frame-Only (Drop-Oldest): luôn lấy đúng frame mới nhất từ camera,
+      không tạo hàng đợi gây trễ hình (zero queue backlog).
+    - Chống suy luận trùng lặp trên cùng một frame_timestamp.
+    - Hỗ trợ callback `on_result` giúp kích hoạt luồng xác nhận & cảnh báo ngay tức khắc
+      khi AI vừa suy luận xong, không bị phụ thuộc vào tốc độ vẽ GUI/Web.
     """
-    def __init__(self, detector):
+
+    def __init__(self, detector, on_result=None):
         self.detector = detector
+        self.on_result = on_result
         self.latest_frame = None
+        self.latest_frame_timestamp = 0.0
+        self._processed_frame_timestamp = -1.0
         self.latest_detections = []
         self.lock = threading.Lock()
+        self._result_cond = threading.Condition(self.lock)
         self.running = True
         self.has_new_frame = threading.Event()
         self.ai_fps = 0.0
+        self.last_inference_ms = 0.0
         self.last_update_time = 0.0
         self.last_error = None
 
-        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread = threading.Thread(
+            target=self._worker, daemon=True, name="AsyncAIWorker"
+        )
         self.thread.start()
         self.last_update_time = time.time()
         print("[AsyncDetector] Da khoi chay luong AI suy luan ngam (Async Thread).")
 
-    def update_frame(self, frame):
-        """Cung cấp khung hình mới nhất từ camera cho AI suy luận (không chờ)"""
+    def update_frame(self, frame, frame_timestamp: float = None):
+        """Cung cấp khung hình mới nhất từ camera cho AI suy luận (Zero-Copy, O(1))."""
+        if frame is None:
+            return
         with self.lock:
+            if (
+                frame_timestamp is not None
+                and frame_timestamp == self.latest_frame_timestamp
+            ):
+                return
             self.latest_frame = frame
+            self.latest_frame_timestamp = (
+                float(frame_timestamp)
+                if frame_timestamp is not None
+                else time.monotonic()
+            )
         self.has_new_frame.set()
 
     def _worker(self):
         count = 0
-        t0 = time.time()
+        t0 = time.monotonic()
         while self.running:
-            # Chờ có frame mới cần xử lý (timeout 0.05s)
             if not self.has_new_frame.wait(timeout=0.05):
                 continue
             self.has_new_frame.clear()
 
             with self.lock:
                 frame_to_process = self.latest_frame
-
-            if frame_to_process is None:
-                continue
+                frame_ts = self.latest_frame_timestamp
+                if (
+                    frame_to_process is None
+                    or frame_ts == self._processed_frame_timestamp
+                ):
+                    continue
+                self._processed_frame_timestamp = frame_ts
 
             try:
-                # Chạy suy luận ONNX
+                infer_start = time.perf_counter()
                 dets = self.detector.detect(frame_to_process)
-                with self.lock:
+                infer_ms = (time.perf_counter() - infer_start) * 1000.0
+                result_wall_time = time.time()
+
+                count += 1
+                now_mono = time.monotonic()
+                elapsed = now_mono - t0
+                if elapsed >= 1.0:
+                    current_ai_fps = count / elapsed
+                    count = 0
+                    t0 = now_mono
+                else:
+                    current_ai_fps = self.ai_fps if self.ai_fps > 0 else (1000.0 / max(1.0, infer_ms))
+
+                with self._result_cond:
                     self.latest_detections = dets
-                    self.last_update_time = time.time()
+                    self.last_inference_ms = infer_ms
+                    self.ai_fps = current_ai_fps
+                    self.last_update_time = result_wall_time
                     self.last_error = None
+                    self._result_cond.notify_all()
+
+                if self.on_result is not None:
+                    try:
+                        self.on_result(
+                            dets,
+                            frame_to_process,
+                            current_ai_fps,
+                            result_wall_time,
+                            infer_ms,
+                        )
+                    except Exception as cb_err:
+                        print(f"[AsyncDetector] Loi trong callback on_result: {cb_err}")
+
             except Exception as e:
-                with self.lock:
+                with self._result_cond:
                     self.last_error = str(e)
+                    self._result_cond.notify_all()
                 print(f"[AsyncDetector] Loi suy luan AI: {e}")
 
-            count += 1
-            now = time.time()
-            if now - t0 >= 1.0:
-                self.ai_fps = count / (now - t0)
-                count = 0
-                t0 = now
-
     def get_detections(self):
-        """Lấy kết quả nhận diện mới nhất (không chặn, O(1)) kèm AI FPS"""
+        """Lấy kết quả nhận diện mới nhất (không chặn, O(1)) kèm AI FPS."""
         with self.lock:
             return list(self.latest_detections), self.ai_fps
 
@@ -254,8 +348,10 @@ class AsyncFireDetector:
             )
 
     def stop(self):
-        """Dừng luồng AI an toàn"""
+        """Dừng luồng AI an toàn."""
         self.running = False
         self.has_new_frame.set()
+        with self._result_cond:
+            self._result_cond.notify_all()
         if hasattr(self, "thread") and self.thread.is_alive():
             self.thread.join(timeout=1.0)

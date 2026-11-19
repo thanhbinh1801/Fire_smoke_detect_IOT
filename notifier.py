@@ -93,26 +93,29 @@ class TelegramNotifier:
         return bool(self.enabled and self.bot_token and self.chat_id)
 
     def _save_chat_id_to_config(self, chat_id: str):
-        """Tự động điền TELEGRAM_CHAT_ID vào config.py nếu đang để trống."""
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
+        """Tự động điền TELEGRAM_CHAT_ID vào file .env (hoặc config.py) nếu đang để trống."""
+        os.environ["TELEGRAM_CHAT_ID"] = str(chat_id)
+        config.TELEGRAM_CHAT_ID = str(chat_id)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        env_path = os.path.join(base_dir, ".env")
         try:
-            if not os.path.exists(config_path):
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8") as f:
+                    env_content = f.read()
+                new_env, count = re.subn(
+                    r"^(TELEGRAM_CHAT_ID\s*=\s*).*$",
+                    f"\\g<1>{chat_id}",
+                    env_content,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+                if count == 0:
+                    new_env = env_content.rstrip() + f"\nTELEGRAM_CHAT_ID={chat_id}\n"
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.write(new_env)
                 return
-            with open(config_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            new_content, count = re.subn(
-                r'^(TELEGRAM_CHAT_ID\s*=\s*)""',
-                f'\\1"{chat_id}"',
-                content,
-                count=1,
-                flags=re.MULTILINE,
-            )
-            if count > 0:
-                with open(config_path, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-                config.TELEGRAM_CHAT_ID = chat_id
         except Exception as error:
-            logger.debug("Không tự lưu được TELEGRAM_CHAT_ID vào config.py: %s", error)
+            logger.debug("Không tự lưu được TELEGRAM_CHAT_ID vào .env: %s", error)
 
     def _bot_command_listener(self):
         """Lắng nghe lệnh /start hoặc /id trên Telegram để tự động trả lời Chat ID cho người dùng."""

@@ -1,5 +1,5 @@
 # main.py
-"""Chế độ giám sát local bằng cửa sổ OpenCV."""
+"""Chế độ giám sát local bằng cửa sổ OpenCV (Tối ưu luồng Camera -> AI -> Cảnh báo)."""
 
 import os
 import sys
@@ -21,11 +21,16 @@ if sys.platform == "win32":
 
 import config
 from camera import FireCamera
-from confirmation import build_alarm_confirmer
+from confirmation import (
+    AsyncSnapshotSaver,
+    build_alarm_confirmer,
+    build_smoke_confirmer,
+)
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
 from notifier import TelegramNotifier
 import display
+
 
 def main():
     print("=" * 60)
@@ -40,7 +45,7 @@ def main():
 
     frame = None
     frame_count = 0
-    fps_start_time = time.time()
+    fps_start_time = time.monotonic()
     cam_fps = 0.0
 
     last_fire_time = 0.0
@@ -50,9 +55,13 @@ def main():
     cached_detections = []
     is_fire_confirmed = False
     alarm_confirmer = build_alarm_confirmer()
+    smoke_confirmer = build_smoke_confirmer()
+    snapshot_saver = AsyncSnapshotSaver()
     display_interval = 1.0 / max(1, int(getattr(config, "DISPLAY_FPS", 15)))
     next_display_at = 0.0
     required_smoke_votes = max(1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2)))
+    stale_timeout = float(getattr(config, "CAMERA_STALE_TIMEOUT", 2.0))
+    hold_fire_time = max(0.0, float(getattr(config, "HOLD_FIRE_TIME", 1.5)))
 
     try:
         camera = FireCamera()
@@ -68,28 +77,32 @@ def main():
         print("-> Nhan 'q' tren cua so video hoac Ctrl+C trong terminal de dung.\n")
 
         while True:
-            new_frame, frame_time = camera.get_frame_if_new(last_camera_frame_time)
+            # 1. Thu nhận khung hình mới từ Camera (Zero-Copy, Condition wait ngắn)
+            new_frame, frame_time = camera.wait_for_new_frame(
+                last_camera_frame_time, timeout=0.004, copy=False
+            )
             if frame_time <= 0.0:
-                time.sleep(0.005)
                 continue
-            if time.monotonic() - frame_time > float(
-                getattr(config, "CAMERA_STALE_TIMEOUT", 2.0)
-            ):
+            if time.monotonic() - frame_time > stale_timeout:
                 raise RuntimeError("Camera không cung cấp frame mới quá thời gian cho phép.")
 
             if new_frame is not None:
                 frame = new_frame
                 last_camera_frame_time = frame_time
-                async_detector.update_frame(frame)
+                # Đẩy ngay sang worker AI bất đồng bộ (không copy, không tạo hàng đợi trễ)
+                async_detector.update_frame(frame, frame_timestamp=frame_time)
                 frame_count += 1
-            else:
-                time.sleep(0.002)
+
+            if frame is None:
                 continue
 
+            # 2. Kiểm tra kết quả AI mới nhất ngay cả khi đang giữa 2 frame camera
             current_detections, ai_fps, result_time, _ = async_detector.get_result()
             now = time.time()
 
             has_new_result = bool(result_time and result_time != last_result_time)
+            has_fire_now = False
+            has_smoke_now = False
             if has_new_result:
                 last_result_time = result_time
                 has_fire_now = any(
@@ -103,17 +116,30 @@ def main():
                 if has_fire_now:
                     last_fire_time = now
                     cached_detections = current_detections
+
+            # 3. Xác nhận cảnh báo qua cửa sổ trượt thời gian & kích hoạt tức thì
             is_fire_confirmed = alarm_confirmer.update(
                 current_detections, now=now, result_time=result_time
             )
+            is_smoke_confirmed = smoke_confirmer.update(
+                current_detections, now=now, result_time=result_time
+            )
+
+            alert.set_fire_led(is_fire_confirmed)
+            alert.set_buzzer(is_fire_confirmed)
+
             if has_new_result:
                 if is_fire_confirmed and has_fire_now:
                     notifier.notify(
                         "fire", frame, current_detections, fps=cam_fps, ai_fps=ai_fps
                     )
+                    snapshot_saver.save_if_due(frame, now=now)
+
                 if has_smoke_now:
                     smoke_votes += 1
-                    if smoke_votes >= required_smoke_votes and not is_fire_confirmed:
+                    if (
+                        smoke_votes >= required_smoke_votes or is_smoke_confirmed
+                    ) and not is_fire_confirmed:
                         notifier.notify(
                             "smoke", frame, current_detections, fps=cam_fps, ai_fps=ai_fps
                         )
@@ -123,35 +149,21 @@ def main():
             if not is_fire_confirmed and not current_detections:
                 cached_detections = []
 
-            alert.set_fire_led(is_fire_confirmed)
-            alert.set_buzzer(is_fire_confirmed)
-
-            if config.SAVE_SNAPSHOT and is_fire_confirmed and has_new_result and any(
-                detection.get("label") == "fire" for detection in current_detections
-            ):
-                if now - getattr(main, "_last_snapshot_time", 0.0) >= 2.0:
-                    timestamp_str = time.strftime("%Y%m%d_%H%M%S")
-                    filename = os.path.join(
-                        config.SNAPSHOT_DIR,
-                        f"alert_{timestamp_str}_{int(now * 1000) % 1000}.jpg",
-                    )
-                    if not cv2.imwrite(filename, frame):
-                        print(f"[Loi] Khong luu duoc snapshot: {filename}")
-                    main._last_snapshot_time = now
-
-            elapsed = time.time() - fps_start_time
+            # 4. Cập nhật thống kê FPS Camera
+            mono_now = time.monotonic()
+            elapsed = mono_now - fps_start_time
             if elapsed >= 1.0:
                 cam_fps = frame_count / elapsed
                 frame_count = 0
-                fps_start_time = time.time()
+                fps_start_time = mono_now
 
+            # 5. Hiển thị giao diện tách biệt nhịp (DISPLAY_FPS) để nhường CPU cho AI
             if config.SHOW_DISPLAY:
-                mono_now = time.monotonic()
                 if mono_now >= next_display_at:
                     next_display_at = mono_now + display_interval
-                    if current_detections and result_time and now - result_time < 0.6:
+                    if current_detections and result_time and (now - result_time) < 0.6:
                         detections_to_draw = current_detections
-                    elif now - last_fire_time < 0.6:
+                    elif is_fire_confirmed and (now - last_fire_time) < max(0.6, hold_fire_time):
                         detections_to_draw = cached_detections
                     else:
                         detections_to_draw = []
@@ -167,19 +179,25 @@ def main():
                         frame, detections_to_draw, fps=cam_fps, ai_fps=ai_fps
                     )
                     action = display.show(display_frame)
-                    if action == 'quit':
+                    if action == "quit":
                         print("[He thong] Nhan lenh thoat tu ban phim.")
                         break
-                    elif action == 'color':
+                    elif action == "color":
                         camera.toggle_color_swap()
-                    elif action == 'focus':
+                    elif action == "focus":
                         camera.trigger_autofocus()
-                    elif action == 'focus_near':
+                    elif action == "focus_near":
                         camera.adjust_focus(+0.2)
-                    elif action == 'focus_far':
+                    elif action == "focus_far":
                         camera.adjust_focus(-0.2)
             else:
-                time.sleep(0.005)
+                notifier.update_runtime_context(
+                    frame,
+                    current_detections,
+                    fps=cam_fps,
+                    ai_fps=ai_fps,
+                    confirmed_fire=is_fire_confirmed,
+                )
 
     except KeyboardInterrupt:
         print("\n[He thong] Dang dung theo yeu cau nguoi dung (Ctrl+C)...")
@@ -200,6 +218,7 @@ def main():
         if config.SHOW_DISPLAY:
             display.close()
         print("[He thong] Da dung an toan. Tam biet!")
+
 
 if __name__ == "__main__":
     main()

@@ -33,7 +33,7 @@ class CameraServo:
         self._detach_timer = None
 
         if self.platform == "pi":
-            from gpiozero import AngularServo
+            from gpiozero import AngularServo  # type: ignore[import-not-found]
 
             self._servo = AngularServo(
                 config.SERVO_PIN,
@@ -152,7 +152,7 @@ class WaterPump:
         self.max_per_minute = int(getattr(config, "PUMP_MAX_PER_MINUTE", 4))
 
         if self.platform == "pi":
-            from gpiozero import OutputDevice
+            from gpiozero import OutputDevice  # type: ignore[import-not-found]
 
             self._device = OutputDevice(
                 config.PUMP_PIN,

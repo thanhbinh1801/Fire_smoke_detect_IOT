@@ -1,6 +1,6 @@
 # camera.py
 """
-Module thu thập hình ảnh camera.
+Module thu thập hình ảnh camera tối ưu độ trễ thấp (Low-Latency Capture).
 
 Nguồn camera được chọn độc lập với nền tảng qua config.CAMERA_SOURCE:
 - "usb": webcam USB đọc bằng OpenCV. Trên Raspberry Pi nên dùng USB 3.0 và
@@ -8,6 +8,7 @@ Nguồn camera được chọn độc lập với nền tảng qua config.CAMERA
 - "csi": Picamera2 dành cho camera CSI (Arducam IMX519) trên Raspberry Pi.
 
 Mọi frame trả về đều ở định dạng BGR để detector.py không phải đổi preprocessing.
+Hỗ trợ cơ chế Condition variable và Zero-Copy handoff sang luồng AI.
 """
 
 import sys
@@ -26,8 +27,10 @@ class FireCamera:
         self.source = str(getattr(config, "CAMERA_SOURCE", default_source)).strip().lower()
         self.running = True
         self.frame = None
+        self.frame_id = 0
         self.frame_updated_at = 0.0
         self.lock = threading.Lock()
+        self._frame_cond = threading.Condition(self.lock)
         self.lens_position = getattr(config, "CAMERA_LENS_POSITION", 2.0)
         self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
 
@@ -42,23 +45,26 @@ class FireCamera:
                 f"CAMERA_SOURCE không hợp lệ: {self.source}. Chọn 'usb' hoặc 'csi'."
             )
 
-        self.thread = threading.Thread(target=self._capture_worker, daemon=True)
+        self.thread = threading.Thread(
+            target=self._capture_worker, daemon=True, name="CameraCapture"
+        )
         self.thread.start()
 
         start_wait = time.time()
         while self.frame is None and (time.time() - start_wait < 5.0):
-            time.sleep(0.05)
+            with self._frame_cond:
+                self._frame_cond.wait(timeout=0.05)
 
         if self.frame is None:
             self.close()
             raise RuntimeError(
                 "Camera không trả về hình ảnh sau 5 giây. "
-                "Kiểm tra kết nối camera, WEBCAM_INDEX và CAMERA_SOURCE trong config.py."
+                "Kiểm tra kết nối camera, WEBCAM_INDEX và CAMERA_SOURCE trong .env / config.py."
             )
 
     def _open_csi(self):
         try:
-            from picamera2 import Picamera2
+            from picamera2 import Picamera2  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "Không tìm thấy thư viện picamera2! "
@@ -177,15 +183,15 @@ class FireCamera:
         return self.swap_rb
 
     def _capture_worker(self):
-        """Luồng đọc liên tục khung hình từ camera ở background."""
+        """Luồng đọc liên tục khung hình từ camera ở background và đánh thức consumer."""
         while self.running:
             try:
                 if self.source == "csi":
                     base_bgr = self.picam2.capture_array()
                 else:
                     ok, raw = self.cap.read()
-                    if not ok:
-                        time.sleep(0.01)
+                    if not ok or raw is None:
+                        time.sleep(0.005)
                         continue
                     base_bgr = raw
 
@@ -194,32 +200,51 @@ class FireCamera:
                 else:
                     current_frame = base_bgr
 
-                with self.lock:
+                now_mono = time.monotonic()
+                with self._frame_cond:
                     self.frame = current_frame
-                    self.frame_updated_at = time.monotonic()
+                    self.frame_id += 1
+                    self.frame_updated_at = now_mono
+                    self._frame_cond.notify_all()
 
             except Exception:
                 time.sleep(0.01)
 
     def get_frame(self):
-        """Trả về 1 frame dạng numpy array (BGR)."""
+        """Trả về 1 bản sao frame dạng numpy array (BGR)."""
         frame, _ = self.get_frame_with_timestamp()
         return frame
 
-    def get_frame_if_new(self, last_timestamp=0.0):
+    def get_frame_if_new(self, last_timestamp=0.0, copy=False):
+        """
+        Lấy frame mới nhất nếu thời điểm cập nhật khác last_timestamp.
+        Mặc định copy=False (Zero-Copy) vì _capture_worker luôn tạo mảng mới cho mỗi frame,
+        giúp tiết kiệm 30 lần cấp phát bộ nhớ 640x480x3 mỗi giây.
+        """
         with self.lock:
             if self.frame is not None and self.frame_updated_at != last_timestamp:
-                return self.frame.copy(), self.frame_updated_at
+                out_frame = self.frame.copy() if copy else self.frame
+                return out_frame, self.frame_updated_at
+            return None, self.frame_updated_at
+
+    def wait_for_new_frame(self, last_timestamp=0.0, timeout=0.02, copy=False):
+        """
+        Chờ đến khi có frame mới hơn last_timestamp hoặc hết timeout (không tốn CPU).
+        """
+        with self._frame_cond:
+            if self.frame is None or self.frame_updated_at == last_timestamp:
+                self._frame_cond.wait(timeout=timeout)
+            if self.frame is not None and self.frame_updated_at != last_timestamp:
+                out_frame = self.frame.copy() if copy else self.frame
+                return out_frame, self.frame_updated_at
             return None, self.frame_updated_at
 
     def get_frame_with_timestamp(self):
         """Trả về bản sao frame mới nhất cùng thời điểm capture monotonic."""
-        with self.lock:
+        with self._frame_cond:
             if self.frame is not None:
                 return self.frame.copy(), self.frame_updated_at
-
-        time.sleep(0.02)
-        with self.lock:
+            self._frame_cond.wait(timeout=0.02)
             if self.frame is not None:
                 return self.frame.copy(), self.frame_updated_at
             return None, 0.0
@@ -227,6 +252,8 @@ class FireCamera:
     def close(self):
         """Giải phóng camera."""
         self.running = False
+        with self._frame_cond:
+            self._frame_cond.notify_all()
         if hasattr(self, "thread") and self.thread.is_alive():
             self.thread.join(timeout=1.0)
 
