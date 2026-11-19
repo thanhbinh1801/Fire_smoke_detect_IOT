@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Giám sát Lửa & Khói IoT",
+    "slug": "fire-smoke-iot-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0a0f18",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.iot.firesmokedetector",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.iot.firesmokedetector",
+      "usesCleartextTraffic": true
+    }
+  }
+}

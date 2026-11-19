@@ -434,6 +434,10 @@ class FireMonitor:
             return False, str(error)
         return True, result if result is not None else "Đã gửi lệnh."
 
+    def get_latest_jpeg(self):
+        with self._frame_ready:
+            return self._jpeg
+
     def stream(self):
         sequence = 0
         while True:
@@ -460,6 +464,13 @@ def create_app(monitor=None):
     app.config["JSON_AS_ASCII"] = False
     app.monitor = monitor if monitor is not None else FireMonitor()
 
+    @app.after_request
+    def add_cors_headers(response):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return response
+
     @app.get("/")
     def index():
         return render_template("index.html")
@@ -469,6 +480,17 @@ def create_app(monitor=None):
         return Response(
             app.monitor.stream(),
             mimetype="multipart/x-mixed-replace; boundary=frame",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
+
+    @app.get("/api/snapshot")
+    def snapshot():
+        jpeg = app.monitor.get_latest_jpeg()
+        if not jpeg:
+            return jsonify({"ok": False, "message": "Chưa có khung hình camera."}), 503
+        return Response(
+            jpeg,
+            mimetype="image/jpeg",
             headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
         )
 

@@ -21,4 +21,10 @@ data/*.png
 .DS_Store
 Thumbs.db
 
+# Mobile App (React Native / Expo)
+mobile_app/node_modules/
+mobile_app/.expo/
+mobile_app/dist/
+mobile_app/web-build/
+
 docs/
