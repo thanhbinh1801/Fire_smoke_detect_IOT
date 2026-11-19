@@ -47,8 +47,10 @@ def test_camera_servo_auto_detaches_on_pi(monkeypatch):
     try:
         servo.set_angle(120.0)
         assert servo.get_angle() == 120.0
+        assert servo.is_moving()
         assert servo._servo.value is not None
         time.sleep(0.25)
+        assert not servo.is_moving()
         assert servo._servo.value is None
     finally:
         servo.cleanup()

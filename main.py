@@ -77,7 +77,6 @@ def main():
         print("-> Nhan 'q' tren cua so video hoac Ctrl+C trong terminal de dung.\n")
 
         while True:
-            # 1. Thu nhận khung hình mới từ Camera (Zero-Copy, Condition wait ngắn)
             new_frame, frame_time = camera.wait_for_new_frame(
                 last_camera_frame_time, timeout=0.004, copy=False
             )
@@ -89,14 +88,12 @@ def main():
             if new_frame is not None:
                 frame = new_frame
                 last_camera_frame_time = frame_time
-                # Đẩy ngay sang worker AI bất đồng bộ (không copy, không tạo hàng đợi trễ)
                 async_detector.update_frame(frame, frame_timestamp=frame_time)
                 frame_count += 1
 
             if frame is None:
                 continue
 
-            # 2. Kiểm tra kết quả AI mới nhất ngay cả khi đang giữa 2 frame camera
             current_detections, ai_fps, result_time, _ = async_detector.get_result()
             now = time.time()
 
@@ -117,7 +114,6 @@ def main():
                     last_fire_time = now
                     cached_detections = current_detections
 
-            # 3. Xác nhận cảnh báo qua cửa sổ trượt thời gian & kích hoạt tức thì
             is_fire_confirmed = alarm_confirmer.update(
                 current_detections, now=now, result_time=result_time
             )
@@ -149,7 +145,6 @@ def main():
             if not is_fire_confirmed and not current_detections:
                 cached_detections = []
 
-            # 4. Cập nhật thống kê FPS Camera
             mono_now = time.monotonic()
             elapsed = mono_now - fps_start_time
             if elapsed >= 1.0:
@@ -157,7 +152,6 @@ def main():
                 frame_count = 0
                 fps_start_time = mono_now
 
-            # 5. Hiển thị giao diện tách biệt nhịp (DISPLAY_FPS) để nhường CPU cho AI
             if config.SHOW_DISPLAY:
                 if mono_now >= next_display_at:
                     next_display_at = mono_now + display_interval
@@ -182,8 +176,6 @@ def main():
                     if action == "quit":
                         print("[He thong] Nhan lenh thoat tu ban phim.")
                         break
-                    elif action == "color":
-                        camera.toggle_color_swap()
                     elif action == "focus":
                         camera.trigger_autofocus()
                     elif action == "focus_near":

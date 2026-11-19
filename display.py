@@ -132,8 +132,6 @@ def show(frame):
     key = cv2.waitKey(1) & 0xFF
     if key in (ord('q'), 27):
         return 'quit'
-    elif key == ord('c'):
-        return 'color'
     elif key == ord('f'):
         return 'focus'
     elif key in (ord(']'), ord('='), ord('+')):

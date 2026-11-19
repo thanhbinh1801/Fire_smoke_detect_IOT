@@ -321,10 +321,6 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 4H5a1 1 0 0 0-1 1v3m12-4h3a1 1 0 0 1 1 1v3M4 16v3a1 1 0 0 0 1 1h3m12-4v3a1 1 0 0 1-1 1h-3M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 Lấy nét tự động
               </button>
-              <button class="control-button" data-action="color" title="Đảo kênh màu đỏ và xanh dương">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v18m0-18 4 4m-4-4L8 7m4 14 4-4m-4 4-4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Đảo màu R-B
-              </button>
               <button class="control-button" data-action="focus_far">Nét xa <kbd>[</kbd></button>
               <button class="control-button" data-action="focus_near">Nét gần <kbd>]</kbd></button>
               <button class="control-button" id="telegram-test" style="grid-column: 1 / -1;" title="Gửi tin nhắn và ảnh kiểm tra về Telegram">
@@ -545,7 +541,6 @@
           const response = await fetch(`/api/camera/${button.dataset.action}`, { method: "POST" });
           const result = await response.json();
           if (!response.ok || !result.ok) throw new Error(result.message || "Không thực hiện được thao tác.");
-          if (button.dataset.action === "color") setText($("state-copy"), result.message);
         } catch (error) {
           setText($("error"), error.message);
         } finally {

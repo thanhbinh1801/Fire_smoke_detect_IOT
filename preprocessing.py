@@ -269,7 +269,8 @@ class FramePreprocessor:
         if resized_w == orig_w and resized_h == orig_h:
             resized = frame
         else:
-            resized = cv2.resize(frame, (resized_w, resized_h))
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            resized = cv2.resize(frame, (resized_w, resized_h), interpolation=interp)
 
         pad_x = (self.input_w - resized_w) // 2
         pad_y = (self.input_h - resized_h) // 2
@@ -314,7 +315,8 @@ class FramePreprocessor:
         if resized_w == work_w and resized_h == work_h:
             resized = working_frame
         else:
-            resized = cv2.resize(working_frame, (resized_w, resized_h))
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            resized = cv2.resize(working_frame, (resized_w, resized_h), interpolation=interp)
 
         if self.has_enhancements:
             resized = self.enhance(resized)

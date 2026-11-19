@@ -32,7 +32,6 @@ class FireCamera:
         self.lock = threading.Lock()
         self._frame_cond = threading.Condition(self.lock)
         self.lens_position = getattr(config, "CAMERA_LENS_POSITION", 2.0)
-        self.swap_rb = getattr(config, "CAMERA_SWAP_RB", False)
 
         if self.source == "csi":
             if self.platform != "pi":
@@ -135,6 +134,8 @@ class FireCamera:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(config.FRAME_HEIGHT))
         self.cap.set(cv2.CAP_PROP_FPS, target_fps)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if sys.platform.startswith("linux"):
+            self._apply_usb_exposure()
 
         actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -143,6 +144,31 @@ class FireCamera:
             f"[Camera] USB webcam index {index} ({fourcc_text or 'default'}) "
             f"{actual_w}x{actual_h} @ {actual_fps:.0f}fps"
         )
+
+    def _apply_usb_exposure(self):
+        try:
+            backlight = int(getattr(config, "USB_BACKLIGHT_COMPENSATION", 1))
+            gain = int(getattr(config, "USB_GAIN", 32))
+            gamma = int(getattr(config, "USB_GAMMA", 120))
+            exposure_time = int(getattr(config, "USB_EXPOSURE_TIME", 313))
+            self.cap.set(cv2.CAP_PROP_BACKLIGHT, backlight)
+            self.cap.set(cv2.CAP_PROP_GAIN, gain)
+            self.cap.set(cv2.CAP_PROP_GAMMA, gamma)
+            if bool(getattr(config, "USB_LOCK_EXPOSURE", False)):
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time)
+                print(
+                    f"[Camera] USB khóa phơi sáng thủ công (exposure={exposure_time}, gain={gain})."
+                )
+            else:
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time)
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+                print(
+                    f"[Camera] USB bật phơi sáng tự động (auto_exposure=3, gain={gain}, gamma={gamma})."
+                )
+        except Exception as error:
+            print(f"[Camera] Cảnh báo cấu hình phơi sáng USB: {error}")
 
     def trigger_autofocus(self):
         """Kích hoạt chu kỳ lấy nét tự động (chỉ có tác dụng với camera CSI)."""
@@ -175,30 +201,18 @@ class FireCamera:
             print(f"[Camera] Lỗi Focus: {error}")
             return f"Không chỉnh được tiêu cự: {error}"
 
-    def toggle_color_swap(self):
-        """Đảo kênh màu R-B trực tiếp khi đang chạy."""
-        self.swap_rb = not self.swap_rb
-        mode = "ĐẢO KÊNH R-B" if self.swap_rb else "MẶC ĐỊNH"
-        print(f"\n[Camera] Đã chuyển chế độ màu: {mode}.")
-        return self.swap_rb
-
     def _capture_worker(self):
         """Luồng đọc liên tục khung hình từ camera ở background và đánh thức consumer."""
         while self.running:
             try:
                 if self.source == "csi":
-                    base_bgr = self.picam2.capture_array()
+                    current_frame = self.picam2.capture_array()
                 else:
                     ok, raw = self.cap.read()
                     if not ok or raw is None:
                         time.sleep(0.005)
                         continue
-                    base_bgr = raw
-
-                if self.swap_rb:
-                    current_frame = cv2.cvtColor(base_bgr, cv2.COLOR_BGR2RGB)
-                else:
-                    current_frame = base_bgr
+                    current_frame = raw
 
                 now_mono = time.monotonic()
                 with self._frame_cond:

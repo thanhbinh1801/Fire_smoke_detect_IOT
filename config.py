@@ -47,7 +47,6 @@ def load_env_file(dotenv_path: str = ENV_FILE_PATH, override: bool = False) -> b
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                     value = value[1:-1]
                 elif "#" in value:
-                    # Tách comment inline (khi không nằm trong chuỗi trích dẫn)
                     for idx, ch in enumerate(value):
                         if ch == "#" and (idx == 0 or value[idx - 1].isspace()):
                             value = value[:idx].strip()
@@ -103,19 +102,24 @@ def _env_bool(key: str, default: bool) -> bool:
 
 
 # ==============================================================================
-# 1. MODEL AI & SUY LUẬN (ONNX RUNTIME)
+# 1. MODEL AI & SUY LUẬN (ONNX RUNTIME + ROI ZOOM 2 GIAI ĐOẠN)
 # ==============================================================================
 MODEL_PATH = _env_str("MODEL_PATH", "models/fire_smoke_yolov8n.onnx")
 
-# Ngưỡng độ tin cậy (0.0 - 1.0)
 CONFIDENCE_THRESHOLD = _env_float("CONFIDENCE_THRESHOLD", 0.40)
 FIRE_CONFIDENCE_THRESHOLD = _env_float("FIRE_CONFIDENCE_THRESHOLD", CONFIDENCE_THRESHOLD)
 SMOKE_CONFIDENCE_THRESHOLD = _env_float("SMOKE_CONFIDENCE_THRESHOLD", CONFIDENCE_THRESHOLD)
 IOU_THRESHOLD = _env_float("IOU_THRESHOLD", 0.45)
 
-# Diện tích box tối thiểu (pixel^2) và số luồng CPU cho ONNX Runtime
 MIN_BOX_AREA = _env_int("MIN_BOX_AREA", 36)
-ORT_INTRA_THREADS = _env_int("ORT_INTRA_THREADS", 3)
+ORT_INTRA_OP_THREADS = _env_int(
+    "ORT_INTRA_OP_THREADS", _env_int("ORT_INTRA_THREADS", 3)
+)
+ORT_INTRA_THREADS = ORT_INTRA_OP_THREADS
+
+ROI_ZOOM_ENABLED = _env_bool("ROI_ZOOM_ENABLED", True)
+ROI_CANDIDATE_THRESHOLD = _env_float("ROI_CANDIDATE_THRESHOLD", 0.22)
+ROI_MAX_BOX_RATIO = _env_float("ROI_MAX_BOX_RATIO", 0.45)
 
 # ==============================================================================
 # 2. TIỀN XỬ LÝ ẢNH (PREPROCESSING)
@@ -135,19 +139,20 @@ PREPROCESS_ROI = _env_str("PREPROCESS_ROI", "")
 FRAME_WIDTH = _env_int("FRAME_WIDTH", 640)
 FRAME_HEIGHT = _env_int("FRAME_HEIGHT", 480)
 
-# "laptop" (webcam qua OpenCV, GPIO giả lập) hoặc "pi" (Raspberry Pi GPIO thật)
 PLATFORM = _env_str("PLATFORM", "laptop").lower()
-
-# "usb" (webcam USB qua OpenCV) hoặc "csi" (Picamera2 IMX519)
 CAMERA_SOURCE = _env_str("CAMERA_SOURCE", "usb").lower()
 WEBCAM_INDEX = _env_int("WEBCAM_INDEX", 0)
 WEBCAM_FOURCC = _env_str("WEBCAM_FOURCC", "MJPG").upper()
 
-# Cấu hình Camera CSI (Arducam IMX519) & Màu sắc
+USB_LOCK_EXPOSURE = _env_bool("USB_LOCK_EXPOSURE", False)
+USB_EXPOSURE_TIME = _env_int("USB_EXPOSURE_TIME", 313)
+USB_GAIN = _env_int("USB_GAIN", 32)
+USB_GAMMA = _env_int("USB_GAMMA", 120)
+USB_BACKLIGHT_COMPENSATION = _env_int("USB_BACKLIGHT_COMPENSATION", 1)
+
 CAMERA_AUTOFOCUS = _env_bool("CAMERA_AUTOFOCUS", False)
 CAMERA_LENS_POSITION = _env_float("CAMERA_LENS_POSITION", 2.5)
 CAMERA_EXPOSURE_COMP = _env_float("CAMERA_EXPOSURE_COMP", -0.5)
-CAMERA_SWAP_RB = _env_bool("CAMERA_SWAP_RB", False)
 
 CAMERA_FPS = _env_int("CAMERA_FPS", 30)
 CAMERA_STALE_TIMEOUT = _env_float("CAMERA_STALE_TIMEOUT", 2.0)
@@ -201,10 +206,11 @@ SERVO_PIN = _env_int("SERVO_PIN", 18)
 SERVO_MIN_ANGLE = _env_float("SERVO_MIN_ANGLE", 30.0)
 SERVO_MAX_ANGLE = _env_float("SERVO_MAX_ANGLE", 150.0)
 SERVO_CENTER_ANGLE = _env_float("SERVO_CENTER_ANGLE", 90.0)
-SERVO_STEP_ANGLE = _env_float("SERVO_STEP_ANGLE", 10.0)
+SERVO_STEP_ANGLE = _env_float("SERVO_STEP_ANGLE", 15.0)
 SERVO_MIN_PULSE_WIDTH = _env_float("SERVO_MIN_PULSE_WIDTH", 0.0005)
 SERVO_MAX_PULSE_WIDTH = _env_float("SERVO_MAX_PULSE_WIDTH", 0.0024)
-SERVO_SETTLE_SECONDS = _env_float("SERVO_SETTLE_SECONDS", 0.6)
+SERVO_SETTLE_SECONDS = _env_float("SERVO_SETTLE_SECONDS", 0.8)
+SERVO_HOLD_POSITION = _env_bool("SERVO_HOLD_POSITION", True)
 
 PUMP_PIN = _env_int("PUMP_PIN", 23)
 PUMP_ACTIVE_HIGH = _env_bool("PUMP_ACTIVE_HIGH", True)

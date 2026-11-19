@@ -1,7 +1,8 @@
 # detector.py
 """
-Module nhận diện lửa và khói sử dụng ONNX Runtime (YOLOv8n, letterbox + blobFromImage).
-Tích hợp pipeline tiền xử lý (FramePreprocessor) và luồng suy luận bất đồng bộ độ trễ thấp.
+Module nhận diện lửa và khói sử dụng ONNX Runtime (YOLOv8n 320x320, letterbox + blobFromImage).
+Tích hợp pipeline tiền xử lý (FramePreprocessor), suy luận 2 giai đoạn ROI Zoom
+và luồng suy luận bất đồng bộ độ trễ thấp (AsyncFireDetector).
 """
 
 import ast
@@ -29,8 +30,18 @@ class FireSmokeDetector:
         print(f"[Detector] Dang nap model ONNX: {self.model_path} ...")
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        intra_threads = max(1, int(getattr(config, "ORT_INTRA_THREADS", 3)))
+        intra_threads = max(
+            1,
+            int(
+                getattr(
+                    config,
+                    "ORT_INTRA_OP_THREADS",
+                    getattr(config, "ORT_INTRA_THREADS", 3),
+                )
+            ),
+        )
         opts.intra_op_num_threads = intra_threads
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self.session = ort.InferenceSession(
             self.model_path,
             sess_options=opts,
@@ -63,6 +74,11 @@ class FireSmokeDetector:
         )
         self.iou_threshold = float(getattr(config, "IOU_THRESHOLD", 0.45))
         self.min_box_area = max(0, int(getattr(config, "MIN_BOX_AREA", 36)))
+        self.roi_zoom_enabled = bool(getattr(config, "ROI_ZOOM_ENABLED", True))
+        self.roi_candidate_threshold = float(
+            getattr(config, "ROI_CANDIDATE_THRESHOLD", 0.22)
+        )
+        self.roi_max_box_ratio = float(getattr(config, "ROI_MAX_BOX_RATIO", 0.45))
 
         self.preprocessor = preprocessor or FramePreprocessor(
             input_w=self.input_w,
@@ -109,9 +125,9 @@ class FireSmokeDetector:
     def infer(self, blob):
         return self.session.run([self.output_name], {self.input_name: blob})
 
-    def _get_class_threshold(self, is_fire: bool, is_smoke: bool) -> float:
-        # Nếu người dùng đặt CONFIDENCE_THRESHOLD trực tiếp trên instance detector,
-        # ưu tiên dùng self.conf_threshold nếu cấu hình riêng không thấp/cao hơn mặc định
+    def _get_class_threshold(self, is_fire: bool, is_smoke: bool, override_threshold=None) -> float:
+        if override_threshold is not None:
+            return float(override_threshold)
         base = float(self.conf_threshold)
         if is_fire:
             return float(getattr(self, "fire_conf_threshold", base))
@@ -119,7 +135,7 @@ class FireSmokeDetector:
             return float(getattr(self, "smoke_conf_threshold", base))
         return base
 
-    def postprocess(self, outputs, meta):
+    def postprocess(self, outputs, meta, conf_threshold=None):
         orig_h, orig_w, scale, pad_x, pad_y = meta
         preds = np.asarray(outputs[0])
         if preds.ndim == 3:
@@ -138,11 +154,15 @@ class FireSmokeDetector:
         class_ids = np.argmax(scores_matrix, axis=1)
         confidences = np.max(scores_matrix, axis=1)
 
-        min_threshold = min(
-            float(self.conf_threshold),
-            float(getattr(self, "fire_conf_threshold", self.conf_threshold)),
-            float(getattr(self, "smoke_conf_threshold", self.conf_threshold)),
-        )
+        if conf_threshold is not None:
+            min_threshold = float(conf_threshold)
+        else:
+            min_threshold = min(
+                float(self.conf_threshold),
+                float(getattr(self, "fire_conf_threshold", self.conf_threshold)),
+                float(getattr(self, "smoke_conf_threshold", self.conf_threshold)),
+            )
+
         mask = confidences >= min_threshold
         if not np.any(mask):
             return []
@@ -174,7 +194,9 @@ class FireSmokeDetector:
             if not is_fire and not is_smoke:
                 continue
 
-            cls_threshold = self._get_class_threshold(is_fire, is_smoke)
+            cls_threshold = self._get_class_threshold(
+                is_fire, is_smoke, override_threshold=conf_threshold
+            )
             class_indices = [
                 i
                 for i, value in enumerate(cls_list)
@@ -202,7 +224,11 @@ class FireSmokeDetector:
                 box_h = ymax - ymin
                 if box_w <= 0 or box_h <= 0:
                     continue
-                if self.min_box_area > 0 and (box_w * box_h) < self.min_box_area:
+                if (
+                    conf_threshold is None
+                    and self.min_box_area > 0
+                    and (box_w * box_h) < self.min_box_area
+                ):
                     continue
 
                 detections.append(
@@ -215,10 +241,98 @@ class FireSmokeDetector:
 
         return sorted(detections, key=lambda detection: detection["conf"], reverse=True)
 
+    @staticmethod
+    def _box_iou(box_a, box_b):
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        if inter_area <= 0:
+            return 0.0
+        area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+        area_b = max(1, (bx2 - bx1) * (by2 - by1))
+        return inter_area / float(area_a + area_b - inter_area)
+
+    def _detect_roi_zoom(self, frame, outputs, meta, primary_detections):
+        orig_h, orig_w = frame.shape[:2]
+        if orig_w <= self.input_w and orig_h <= self.input_h:
+            return primary_detections
+        if self.roi_candidate_threshold >= self.conf_threshold:
+            return primary_detections
+
+        candidates = self.postprocess(
+            outputs, meta, conf_threshold=self.roi_candidate_threshold
+        )
+        max_w = orig_w * self.roi_max_box_ratio
+        max_h = orig_h * self.roi_max_box_ratio
+        weak_candidates = [
+            det
+            for det in candidates
+            if det["conf"] < self.conf_threshold
+            and (det["box"][2] - det["box"][0]) <= max_w
+            and (det["box"][3] - det["box"][1]) <= max_h
+        ]
+        if not weak_candidates:
+            return primary_detections
+
+        best = weak_candidates[0]
+        bx1, by1, bx2, by2 = best["box"]
+        cx = (bx1 + bx2) // 2
+        cy = (by1 + by2) // 2
+        crop_w = min(orig_w, self.input_w)
+        crop_h = min(orig_h, self.input_h)
+        crop_x1 = max(0, min(orig_w - crop_w, cx - crop_w // 2))
+        crop_y1 = max(0, min(orig_h - crop_h, cy - crop_h // 2))
+        roi_frame = frame[crop_y1 : crop_y1 + crop_h, crop_x1 : crop_x1 + crop_w]
+
+        roi_blob, roi_meta = self.preprocess(roi_frame)
+        roi_outputs = self.infer(roi_blob)
+        roi_detections = self.postprocess(roi_outputs, roi_meta)
+        if not roi_detections:
+            return primary_detections
+
+        merged = list(primary_detections)
+        for det in roi_detections:
+            rx1, ry1, rx2, ry2 = det["box"]
+            mapped_box = (
+                max(0, min(orig_w - 1, rx1 + crop_x1)),
+                max(0, min(orig_h - 1, ry1 + crop_y1)),
+                max(0, min(orig_w - 1, rx2 + crop_x1)),
+                max(0, min(orig_h - 1, ry2 + crop_y1)),
+            )
+            mapped_det = {
+                "label": det["label"],
+                "conf": det["conf"],
+                "box": mapped_box,
+            }
+            replaced = False
+            for idx, existing in enumerate(merged):
+                if (
+                    existing["label"] == mapped_det["label"]
+                    and self._box_iou(existing["box"], mapped_box) >= self.iou_threshold
+                ):
+                    if mapped_det["conf"] > existing["conf"]:
+                        merged[idx] = mapped_det
+                    replaced = True
+                    break
+            if not replaced:
+                merged.append(mapped_det)
+
+        return sorted(merged, key=lambda item: item["conf"], reverse=True)
+
     def detect(self, frame):
         blob, meta = self.preprocess(frame)
         outputs = self.infer(blob)
-        return self.postprocess(outputs, meta)
+        detections = self.postprocess(outputs, meta)
+        has_confident_fire = any(det.get("label") == "fire" for det in detections)
+        if self.roi_zoom_enabled and not has_confident_fire:
+            detections = self._detect_roi_zoom(frame, outputs, meta, detections)
+        return detections
 
 
 class AsyncFireDetector:
@@ -227,8 +341,7 @@ class AsyncFireDetector:
     - Cơ chế Latest-Frame-Only (Drop-Oldest): luôn lấy đúng frame mới nhất từ camera,
       không tạo hàng đợi gây trễ hình (zero queue backlog).
     - Chống suy luận trùng lặp trên cùng một frame_timestamp.
-    - Hỗ trợ callback `on_result` giúp kích hoạt luồng xác nhận & cảnh báo ngay tức khắc
-      khi AI vừa suy luận xong, không bị phụ thuộc vào tốc độ vẽ GUI/Web.
+    - Hỗ trợ callback `on_result` giúp kích hoạt luồng xác nhận & cảnh báo ngay tức khắc.
     """
 
     def __init__(self, detector, on_result=None):
@@ -304,7 +417,9 @@ class AsyncFireDetector:
                     count = 0
                     t0 = now_mono
                 else:
-                    current_ai_fps = self.ai_fps if self.ai_fps > 0 else (1000.0 / max(1.0, infer_ms))
+                    current_ai_fps = (
+                        self.ai_fps if self.ai_fps > 0 else (1000.0 / max(1.0, infer_ms))
+                    )
 
                 with self._result_cond:
                     self.latest_detections = dets
