@@ -1,3 +1,4 @@
+// App.js — Ứng dụng di động Giám sát Lửa & Khói IoT (React Native / Expo)
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   StyleSheet,
@@ -11,13 +12,15 @@ import {
   Platform,
   Image,
   ActivityIndicator,
+  Switch,
+  Modal,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { WebView } from "react-native-webview";
 
 const STORAGE_KEY_SERVER_URL = "@fire_iot_server_url";
-const DEFAULT_SERVER_URL = "http://192.168.1.100:5000";
+const DEFAULT_SERVER_URL = "http://192.168.5.216:5000";
 
 function normalizeUrl(raw) {
   let clean = (raw || "").trim().replace(/\/+$/, "");
@@ -29,11 +32,13 @@ function normalizeUrl(raw) {
 }
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState("monitor"); // "monitor" | "history" | "settings"
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [inputUrl, setInputUrl] = useState(DEFAULT_SERVER_URL);
-  const [editingIp, setEditingIp] = useState(false);
   const [useSnapshotStream, setUseSnapshotStream] = useState(Platform.OS === "web");
   const [snapshotTick, setSnapshotTick] = useState(Date.now());
+  const [fullscreenVideo, setFullscreenVideo] = useState(false);
+  const [phoneVibrateEnabled, setPhoneVibrateEnabled] = useState(true);
 
   const [connected, setConnected] = useState(false);
   const [statusData, setStatusData] = useState(null);
@@ -43,7 +48,6 @@ export default function App() {
 
   const lastFireVibrationRef = useRef(0);
 
-  // Nạp IP đã lưu trong máy khi mở App
   useEffect(() => {
     (async () => {
       try {
@@ -53,7 +57,9 @@ export default function App() {
           setServerUrl(norm);
           setInputUrl(norm);
         }
-      } catch {}
+      } catch (_err) {
+        // Bỏ qua lỗi đọc cache ban đầu
+      }
     })();
   }, []);
 
@@ -61,14 +67,15 @@ export default function App() {
     const norm = normalizeUrl(inputUrl);
     setServerUrl(norm);
     setInputUrl(norm);
-    setEditingIp(false);
     setErrorMessage("");
+    setActionMessage("Đã lưu địa chỉ IP máy chủ mới.");
     try {
       await AsyncStorage.setItem(STORAGE_KEY_SERVER_URL, norm);
-    } catch {}
+    } catch (_err) {
+      // Bỏ qua lỗi ghi cache
+    }
   };
 
-  // Poll trạng thái hệ thống từ Raspberry Pi mỗi 1 giây
   const fetchStatus = useCallback(async () => {
     try {
       const controller = new AbortController();
@@ -84,18 +91,17 @@ export default function App() {
       setStatusData(data);
       setConnected(true);
 
-      // Rung điện thoại cảnh báo khi phát hiện LỬA
-      if (data.fire_detected) {
+      if (data.fire_detected && phoneVibrateEnabled) {
         const now = Date.now();
-        if (now - lastFireVibrationRef.current > 3500) {
+        if (now - lastFireVibrationRef.current > 3000) {
           lastFireVibrationRef.current = now;
-          Vibration.vibrate([0, 500, 250, 500]);
+          Vibration.vibrate([0, 600, 250, 600]);
         }
       }
-    } catch {
+    } catch (_err) {
       setConnected(false);
     }
-  }, [serverUrl]);
+  }, [serverUrl, phoneVibrateEnabled]);
 
   useEffect(() => {
     fetchStatus();
@@ -103,7 +109,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [fetchStatus]);
 
-  // Nếu dùng chế độ ảnh Snapshot liên tục, cập nhật 6 FPS
   useEffect(() => {
     if (!useSnapshotStream || !connected) return;
     const timer = setInterval(() => {
@@ -139,6 +144,8 @@ export default function App() {
   };
 
   const detections = Array.isArray(statusData?.detections) ? statusData.detections : [];
+  const historyList = Array.isArray(statusData?.history) ? statusData.history : [];
+  const aiSettings = statusData?.settings || {};
   const hasFire = Boolean(statusData?.fire_detected);
   const hasSmoke = detections.some((d) => d.label === "smoke");
   const isRunning = connected && statusData?.status === "running";
@@ -154,8 +161,8 @@ export default function App() {
   if (connected && statusData) {
     if (hasFire) {
       bannerStyle = styles.bannerFire;
-      stateTitle = "🔥 CẢNH BÁO: PHÁT HIỆN LỬA!";
-      stateSub = "Đã kích hoạt còi, đèn LED và cảnh báo khẩn cấp!";
+      stateTitle = "🔥 CẢNH BÁO KHẨN: PHÁT HIỆN LỬA!";
+      stateSub = "Đang kích hoạt còi, đèn LED & rung điện thoại!";
     } else if (statusData.status === "error") {
       bannerStyle = styles.bannerFire;
       stateTitle = "⚠️ LỖI HỆ THỐNG";
@@ -166,13 +173,13 @@ export default function App() {
       stateSub = "Đang theo dõi đám khói trong khu vực.";
     } else if (statusData.status === "running") {
       bannerStyle = styles.bannerSafe;
-      stateTitle = "🟢 AN TOÀN";
+      stateTitle = "🟢 HỆ THỐNG AN TOÀN";
       stateSub = "Không phát hiện lửa hoặc khói.";
     }
   } else {
     bannerStyle = styles.bannerOffline;
     stateTitle = "MẤT KẾT NỐI THIẾT BỊ";
-    stateSub = `Kiểm tra IP (${serverUrl}) và cùng mạng Wi-Fi với Raspberry Pi.`;
+    stateSub = `Kiểm tra IP (${serverUrl}) ở tab Cài đặt.`;
   }
 
   const mjpegHtml = `
@@ -195,275 +202,741 @@ export default function App() {
     </html>
   `;
 
+  const adjustThreshold = (field, currentVal, delta) => {
+    const next = Math.max(0.15, Math.min(0.9, Number((currentVal + delta).toFixed(2))));
+    sendPost(field, "/api/settings", { [field]: next });
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" backgroundColor="#0a0f18" />
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Thanh Tiêu đề & Kết nối IP */}
-        <View style={styles.header}>
-          <View style={styles.brandRow}>
-            <View style={styles.brandIcon}>
-              <Text style={{ fontSize: 18 }}>🔥</Text>
-            </View>
-            <View>
-              <Text style={styles.brandTitle}>Giám sát Lửa & Khói IoT</Text>
-              <TouchableOpacity onPress={() => setEditingIp(!editingIp)}>
-                <Text style={styles.ipText}>
-                  IP: {serverUrl.replace(/^https?:\/\//, "")} ✎
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
 
-          <View
-            style={[
-              styles.connBadge,
-              connected ? styles.connOnline : styles.connOffline,
-            ]}
-          >
-            <View
-              style={[
-                styles.connDot,
-                { backgroundColor: connected ? "#3ddc97" : "#ff5c5c" },
-              ]}
-            />
-            <Text style={styles.connText}>
-              {connected ? "Trực tuyến" : "Mất kết nối"}
+      {/* Header cố định */}
+      <View style={styles.header}>
+        <View style={styles.brandRow}>
+          <View style={styles.brandIcon}>
+            <Text style={{ fontSize: 18 }}>🔥</Text>
+          </View>
+          <View>
+            <Text style={styles.brandTitle}>Fire & Smoke IoT App</Text>
+            <Text style={styles.ipText}>
+              {serverUrl.replace(/^https?:\/\//, "")}
             </Text>
           </View>
         </View>
 
-        {/* Hộp nhập đổi địa chỉ IP Raspberry Pi */}
-        {editingIp && (
-          <View style={styles.ipCard}>
-            <Text style={styles.ipLabel}>
-              Địa chỉ IP & Cổng của Raspberry Pi / Máy chủ:
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={[
+              styles.vibrateChip,
+              phoneVibrateEnabled ? styles.vibrateOn : styles.vibrateOff,
+            ]}
+            onPress={() => setPhoneVibrateEnabled(!phoneVibrateEnabled)}
+          >
+            <Text style={styles.vibrateChipText}>
+              {phoneVibrateEnabled ? "📳 Rung: BẬT" : "🔕 Rung: TẮT"}
             </Text>
-            <View style={styles.ipInputRow}>
-              <TextInput
-                style={styles.ipInput}
-                value={inputUrl}
-                onChangeText={setInputUrl}
-                placeholder="http://192.168.1.100:5000"
-                placeholderTextColor="#64748b"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-              />
-              <TouchableOpacity style={styles.ipSaveBtn} onPress={saveServerUrl}>
-                <Text style={styles.ipSaveBtnText}>Kết nối</Text>
-              </TouchableOpacity>
+          </TouchableOpacity>
+          <View
+            style={[
+              styles.connDot,
+              { backgroundColor: connected ? "#3ddc97" : "#ff5c5c" },
+            ]}
+          />
+        </View>
+      </View>
+
+      {/* Banner cảnh báo luôn hiển thị ở trên cùng mọi tab */}
+      <View style={styles.bannerWrap}>
+        <View style={[styles.banner, bannerStyle]}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.bannerTitle}>{stateTitle}</Text>
+            {detections.length > 0 && (
+              <View style={styles.alertCountPill}>
+                <Text style={styles.alertCountText}>
+                  {detections.length} mục tiêu
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.bannerSub}>{stateSub}</Text>
+        </View>
+      </View>
+
+      {/* NỘI DUNG TỪNG TAB */}
+      <ScrollView contentContainerStyle={styles.container}>
+        {activeTab === "monitor" && (
+          <>
+            {/* Khung Video Camera Trực Tiếp */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View style={styles.brandRow}>
+                  <Text style={styles.cardTitle}>Camera trực tiếp</Text>
+                  {isRunning && <Text style={styles.liveTag}>● LIVE</Text>}
+                </View>
+                <View style={styles.cardHeaderRight}>
+                  <TouchableOpacity
+                    style={styles.modeSwitchBtn}
+                    onPress={() => setUseSnapshotStream(!useSnapshotStream)}
+                  >
+                    <Text style={styles.modeSwitchText}>
+                      {useSnapshotStream ? "Snapshot" : "MJPEG"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.modeSwitchBtn}
+                    onPress={() => setFullscreenVideo(true)}
+                  >
+                    <Text style={styles.modeSwitchText}>⛶ Phóng to</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.videoBox}>
+                {isRunning ? (
+                  useSnapshotStream ? (
+                    <Image
+                      source={{ uri: `${serverUrl}/api/snapshot?t=${snapshotTick}` }}
+                      style={styles.videoStream}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <WebView
+                      originWhitelist={["*"]}
+                      source={{ html: mjpegHtml, baseUrl: serverUrl }}
+                      style={styles.videoStream}
+                      scrollEnabled={false}
+                      bounces={false}
+                    />
+                  )
+                ) : (
+                  <View style={styles.videoPlaceholder}>
+                    <ActivityIndicator size="small" color="#5e9eff" />
+                    <Text style={styles.placeholderText}>
+                      {connected
+                        ? "Đang khởi tạo luồng camera..."
+                        : "Chưa kết nối tới máy chủ camera"}
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.metricsRow}>
+                <View style={styles.metricItem}>
+                  <Text style={styles.metricLabel}>Camera FPS</Text>
+                  <Text style={styles.metricValue}>
+                    {statusData ? Number(statusData.camera_fps || 0).toFixed(1) : "--"}
+                  </Text>
+                </View>
+                <View style={styles.metricItem}>
+                  <Text style={styles.metricLabel}>AI FPS</Text>
+                  <Text style={styles.metricValue}>
+                    {statusData ? Number(statusData.ai_fps || 0).toFixed(1) : "--"}
+                  </Text>
+                </View>
+                <View style={styles.metricItem}>
+                  <Text style={styles.metricLabel}>Góc Servo</Text>
+                  <Text style={styles.metricValue}>
+                    {servoAngle == null ? "--°" : `${Math.round(Number(servoAngle))}°`}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Điều khiển Góc Servo thông minh (Nút vi chỉnh + Mốc góc nhanh 30°-150°) */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Xoay Camera (Servo SG90)</Text>
+                <Text style={styles.angleHighlight}>
+                  {servoAngle == null ? "--°" : `${Math.round(Number(servoAngle))}°`}
+                </Text>
+              </View>
+
+              <View style={styles.cardBody}>
+                <View style={styles.grid3}>
+                  <TouchableOpacity
+                    style={styles.btn}
+                    disabled={busyKey !== null}
+                    onPress={() =>
+                      sendPost("servo-left", "/api/servo", { action: "left" })
+                    }
+                  >
+                    <Text style={styles.btnText}>← Quay Trái</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.btn}
+                    disabled={busyKey !== null}
+                    onPress={() =>
+                      sendPost("servo-center", "/api/servo", { action: "center" })
+                    }
+                  >
+                    <Text style={styles.btnText}>Giữa (90°)</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.btn}
+                    disabled={busyKey !== null}
+                    onPress={() =>
+                      sendPost("servo-right", "/api/servo", { action: "right" })
+                    }
+                  >
+                    <Text style={styles.btnText}>Quay Phải →</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={[styles.subHint, { marginTop: 12, marginBottom: 6 }]}>
+                  Chọn nhanh góc nhìn cố định:
+                </Text>
+                <View style={styles.presetRow}>
+                  {[30, 60, 90, 120, 150].map((deg) => {
+                    const isSelected =
+                      servoAngle != null && Math.round(Number(servoAngle)) === deg;
+                    return (
+                      <TouchableOpacity
+                        key={deg}
+                        style={[
+                          styles.presetBtn,
+                          isSelected && styles.presetBtnActive,
+                        ]}
+                        disabled={busyKey !== null}
+                        onPress={() =>
+                          sendPost(`servo-${deg}`, "/api/servo", {
+                            action: "set",
+                            angle: deg,
+                          })
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.presetBtnText,
+                            isSelected && { color: "#07101e", fontWeight: "800" },
+                          ]}
+                        >
+                          {deg}°
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+
+            {/* Điều khiển Bơm Nước Chữa Cháy */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Hệ thống Bơm Chữa Cháy</Text>
+                <Text
+                  style={{
+                    color: isPumpOn ? "#ff5c5c" : autoArmed ? "#3ddc97" : "#8c9aad",
+                    fontSize: 12,
+                    fontWeight: "700",
+                  }}
+                >
+                  {isPumpOn ? "● ĐANG PHUN" : autoArmed ? "● AUTO BẬT" : "● TẮT"}
+                </Text>
+              </View>
+
+              <View style={styles.cardBody}>
+                <TouchableOpacity
+                  style={[styles.btnFull, autoArmed && styles.btnActiveGreen]}
+                  disabled={busyKey !== null}
+                  onPress={() =>
+                    sendPost("pump-arm", "/api/pump/arm", { armed: !autoArmed })
+                  }
+                >
+                  <Text
+                    style={[
+                      styles.btnText,
+                      autoArmed && { color: "#07120d", fontWeight: "800" },
+                    ]}
+                  >
+                    {autoArmed
+                      ? "✓ Đang BẬT chế độ tự động phun khi có lửa"
+                      : "Bật chế độ tự động phun khi có lửa"}
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.grid2}>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnPrimary]}
+                    disabled={busyKey !== null}
+                    onPress={() => sendPost("pump-on", "/api/pump", { action: "on" })}
+                  >
+                    <Text style={styles.btnPrimaryText}>💦 Phun Nước Ngay</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnDanger]}
+                    disabled={busyKey !== null}
+                    onPress={() =>
+                      sendPost("pump-stop", "/api/pump", { action: "stop" })
+                    }
+                  >
+                    <Text style={styles.btnDangerText}>🛑 DỪNG BƠM</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.pumpStatusText}>
+                  {isPumpOn
+                    ? `Đang phun nước: còn ${Number(pump.seconds_remaining || 0).toFixed(1)}s`
+                    : autoArmed
+                    ? `Tự động phun đã sẵn sàng (${pump.runs_last_minute || 0}/${pump.max_per_minute || 4} lần/phút)`
+                    : "Chế độ tự động đang tắt."}
+                </Text>
+              </View>
+            </View>
+          </>
+        )}
+
+        {/* TAB 2: NHẬT KÝ CẢNH BÁO */}
+        {activeTab === "history" && (
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>
+                Nhật ký Phát hiện Lửa & Khói ({historyList.length})
+              </Text>
+              {historyList.length > 0 && (
+                <TouchableOpacity
+                  style={styles.modeSwitchBtn}
+                  onPress={() => sendPost("clear-history", "/api/history/clear")}
+                >
+                  <Text style={{ color: "#ff7b7b", fontSize: 11, fontWeight: "700" }}>
+                    Xóa lịch sử
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.cardBody}>
+              {historyList.length === 0 ? (
+                <View style={{ paddingVertical: 28, alignItems: "center" }}>
+                  <Text style={{ fontSize: 28, marginBottom: 8 }}>🛡️</Text>
+                  <Text style={{ color: "#c5d0de", fontSize: 14, fontWeight: "600" }}>
+                    Chưa có cảnh báo nào được ghi nhận
+                  </Text>
+                  <Text style={{ color: "#8c9aad", fontSize: 12, marginTop: 4 }}>
+                    Mọi sự kiện phát hiện Lửa hoặc Khói sẽ tự động lưu tại đây.
+                  </Text>
+                </View>
+              ) : (
+                historyList.map((item) => {
+                  const isFireEvt = item.type === "fire";
+                  return (
+                    <View
+                      key={item.id}
+                      style={[
+                        styles.historyItem,
+                        isFireEvt ? styles.historyFire : styles.historySmoke,
+                      ]}
+                    >
+                      <View style={styles.rowBetween}>
+                        <Text style={styles.historyTitle}>
+                          {isFireEvt ? "🔥 PHÁT HIỆN LỬA" : "💨 PHÁT HIỆN KHÓI"}
+                        </Text>
+                        <Text style={styles.historyTime}>{item.time_str}</Text>
+                      </View>
+                      <Text style={styles.historyMeta}>
+                        Số vùng: {item.count} · Độ tin cậy cao nhất:{" "}
+                        {(Number(item.max_conf || 0) * 100).toFixed(1)}%
+                      </Text>
+                    </View>
+                  );
+                })
+              )}
             </View>
           </View>
         )}
 
-        {/* 1. Bảng Trạng thái Cảnh báo */}
-        <View style={[styles.banner, bannerStyle]}>
-          <Text style={styles.bannerTitle}>{stateTitle}</Text>
-          <Text style={styles.bannerSub}>{stateSub}</Text>
-        </View>
-
-        {/* 2. Khung Video Camera Trực Tiếp */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Camera trực tiếp</Text>
-            <View style={styles.cardHeaderRight}>
-              {isRunning && <Text style={styles.liveTag}>● LIVE</Text>}
-              <TouchableOpacity
-                style={styles.modeSwitchBtn}
-                onPress={() => setUseSnapshotStream(!useSnapshotStream)}
-              >
-                <Text style={styles.modeSwitchText}>
-                  {useSnapshotStream ? "Chế độ: Snapshot" : "Chế độ: MJPEG"}
+        {/* TAB 3: CÀI ĐẶT AI & TIỀN XỬ LÝ TRỰC TIẾP */}
+        {activeTab === "settings" && (
+          <>
+            {/* Tinh chỉnh ngưỡng nhạy AI thời gian thực */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>
+                  Tinh chỉnh Ngưỡng AI (Thời gian thực)
                 </Text>
-              </TouchableOpacity>
+              </View>
+              <View style={styles.cardBody}>
+                <View style={styles.settingRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingTitle}>Ngưỡng nhận diện LỬA</Text>
+                    <Text style={styles.settingDesc}>
+                      Thấp hơn = nhạy hơn với lửa nhỏ; Cao hơn = chống báo giả
+                    </Text>
+                  </View>
+                  <View style={styles.stepperRow}>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() =>
+                        adjustThreshold(
+                          "fire_confidence_threshold",
+                          Number(aiSettings.fire_confidence_threshold || 0.4),
+                          -0.05
+                        )
+                      }
+                    >
+                      <Text style={styles.stepperBtnText}>-</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.stepperValue}>
+                      {Math.round(
+                        Number(aiSettings.fire_confidence_threshold || 0.4) * 100
+                      )}
+                      %
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() =>
+                        adjustThreshold(
+                          "fire_confidence_threshold",
+                          Number(aiSettings.fire_confidence_threshold || 0.4),
+                          +0.05
+                        )
+                      }
+                    >
+                      <Text style={styles.stepperBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.settingRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingTitle}>Ngưỡng nhận diện KHÓI</Text>
+                    <Text style={styles.settingDesc}>
+                      Điều chỉnh độ nhạy phát hiện đám khói sớm
+                    </Text>
+                  </View>
+                  <View style={styles.stepperRow}>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() =>
+                        adjustThreshold(
+                          "smoke_confidence_threshold",
+                          Number(aiSettings.smoke_confidence_threshold || 0.38),
+                          -0.05
+                        )
+                      }
+                    >
+                      <Text style={styles.stepperBtnText}>-</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.stepperValue}>
+                      {Math.round(
+                        Number(aiSettings.smoke_confidence_threshold || 0.38) * 100
+                      )}
+                      %
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() =>
+                        adjustThreshold(
+                          "smoke_confidence_threshold",
+                          Number(aiSettings.smoke_confidence_threshold || 0.38),
+                          +0.05
+                        )
+                      }
+                    >
+                      <Text style={styles.stepperBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.settingRow}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={styles.settingTitle}>
+                      ROI Zoom 2 giai đoạn (Lửa ở xa)
+                    </Text>
+                    <Text style={styles.settingDesc}>
+                      Tự động cắt 1:1 vùng nghi ngờ để phát hiện đốm lửa nhỏ
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(aiSettings.roi_zoom_enabled ?? true)}
+                    onValueChange={(val) =>
+                      sendPost("roi-zoom", "/api/settings", {
+                        roi_zoom_enabled: val,
+                      })
+                    }
+                    trackColor={{ false: "#243144", true: "#3ddc97" }}
+                  />
+                </View>
+              </View>
             </View>
-          </View>
 
-          <View style={styles.videoBox}>
-            {isRunning ? (
-              useSnapshotStream ? (
-                <Image
-                  source={{ uri: `${serverUrl}/api/snapshot?t=${snapshotTick}` }}
-                  style={styles.videoStream}
-                  resizeMode="contain"
-                />
-              ) : (
-                <WebView
-                  originWhitelist={["*"]}
-                  source={{ html: mjpegHtml, baseUrl: serverUrl }}
-                  style={styles.videoStream}
-                  scrollEnabled={false}
-                  bounces={false}
-                />
-              )
-            ) : (
-              <View style={styles.videoPlaceholder}>
-                <ActivityIndicator size="small" color="#5e9eff" />
-                <Text style={styles.placeholderText}>
-                  {connected
-                    ? "Đang khởi tạo luồng camera..."
-                    : "Chưa kết nối tới máy chủ camera"}
+            {/* Bộ lọc Tiền xử lý ảnh (Preprocessing Filters) */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>
+                  Bộ lọc Tiền xử lý ảnh (Preprocessing)
                 </Text>
+              </View>
+              <View style={styles.cardBody}>
+                <View style={styles.settingRow}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={styles.settingTitle}>
+                      Tăng tương phản CLAHE (LAB)
+                    </Text>
+                    <Text style={styles.settingDesc}>
+                      Làm nổi rõ đám khói mờ hoặc ngược sáng
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(aiSettings.enable_clahe)}
+                    onValueChange={(val) =>
+                      sendPost("clahe", "/api/settings", { enable_clahe: val })
+                    }
+                    trackColor={{ false: "#243144", true: "#3ddc97" }}
+                  />
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.settingRow}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={styles.settingTitle}>
+                      Cân bằng trắng tự động (Gray-World)
+                    </Text>
+                    <Text style={styles.settingDesc}>
+                      Ổn định màu lửa dưới ánh đèn vàng/huỳnh quang
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(aiSettings.auto_wb)}
+                    onValueChange={(val) =>
+                      sendPost("auto-wb", "/api/settings", { auto_wb: val })
+                    }
+                    trackColor={{ false: "#243144", true: "#3ddc97" }}
+                  />
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.settingRow}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={styles.settingTitle}>
+                      Làm sắc nét biên (Sharpen)
+                    </Text>
+                    <Text style={styles.settingDesc}>
+                      Tăng độ nét viền ngọn lửa ở khoảng cách xa
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(aiSettings.sharpen)}
+                    onValueChange={(val) =>
+                      sendPost("sharpen", "/api/settings", { sharpen: val })
+                    }
+                    trackColor={{ false: "#243144", true: "#3ddc97" }}
+                  />
+                </View>
+
+                <View style={styles.divider} />
+
+                <Text style={styles.settingTitle}>
+                  Hiệu chỉnh sáng Gamma:{" "}
+                  <Text style={{ color: "#5e9eff" }}>
+                    {Number(aiSettings.gamma || 1.0).toFixed(2)}
+                  </Text>
+                </Text>
+                <Text style={[styles.settingDesc, { marginBottom: 8 }]}>
+                  {"< 1.0: Giảm lóa sáng · 1.0: Mặc định · > 1.0: Làm sáng vùng tối"}
+                </Text>
+                <View style={styles.presetRow}>
+                  {[0.7, 0.85, 1.0, 1.2, 1.5].map((g) => {
+                    const activeG =
+                      Math.abs(Number(aiSettings.gamma || 1.0) - g) < 0.03;
+                    return (
+                      <TouchableOpacity
+                        key={g}
+                        style={[
+                          styles.presetBtn,
+                          activeG && styles.presetBtnActive,
+                        ]}
+                        onPress={() =>
+                          sendPost("gamma", "/api/settings", { gamma: g })
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.presetBtnText,
+                            activeG && { color: "#07101e", fontWeight: "800" },
+                          ]}
+                        >
+                          {g}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+
+            {/* Kết nối Máy chủ & Telegram */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Kết nối Thiết bị & Telegram</Text>
+              </View>
+              <View style={styles.cardBody}>
+                <Text style={styles.ipLabel}>
+                  Địa chỉ IP & Cổng của Raspberry Pi / Laptop:
+                </Text>
+                <View style={styles.ipInputRow}>
+                  <TextInput
+                    style={styles.ipInput}
+                    value={inputUrl}
+                    onChangeText={setInputUrl}
+                    placeholder="http://192.168.5.216:5000"
+                    placeholderTextColor="#64748b"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                  />
+                  <TouchableOpacity
+                    style={styles.ipSaveBtn}
+                    onPress={saveServerUrl}
+                  >
+                    <Text style={styles.ipSaveBtnText}>Lưu IP</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.divider} />
+
                 <TouchableOpacity
-                  style={styles.changeIpHintBtn}
-                  onPress={() => setEditingIp(true)}
+                  style={styles.btnFull}
+                  disabled={busyKey !== null}
+                  onPress={() => sendPost("telegram-test", "/api/telegram/test")}
                 >
-                  <Text style={styles.changeIpHintText}>Đổi địa chỉ IP</Text>
+                  <Text style={styles.btnText}>
+                    {busyKey === "telegram-test"
+                      ? "Đang gửi tới Telegram..."
+                      : "📨 Gửi thử ảnh & cảnh báo về Telegram Bot"}
+                  </Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </>
+        )}
+
+        {actionMessage ? (
+          <Text style={styles.successMsg}>✓ {actionMessage}</Text>
+        ) : null}
+        {errorMessage ? (
+          <Text style={styles.errorMsg}>⚠ {errorMessage}</Text>
+        ) : null}
+      </ScrollView>
+
+      {/* Modal Xem Camera Toàn Màn Hình */}
+      <Modal
+        visible={fullscreenVideo}
+        animationType="fade"
+        transparent={false}
+        onRequestClose={() => setFullscreenVideo(false)}
+      >
+        <SafeAreaView style={styles.fullscreenModal}>
+          <View style={styles.fullscreenHeader}>
+            <Text style={styles.cardTitle}>
+              Camera Toàn Màn Hình ({servoAngle == null ? "--°" : `${Math.round(Number(servoAngle))}°`})
+            </Text>
+            <TouchableOpacity
+              style={styles.closeFullBtn}
+              onPress={() => setFullscreenVideo(false)}
+            >
+              <Text style={styles.closeFullBtnText}>✕ Đóng</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ flex: 1, backgroundColor: "#000" }}>
+            {isRunning && (
+              <WebView
+                originWhitelist={["*"]}
+                source={{ html: mjpegHtml, baseUrl: serverUrl }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                scrollEnabled={false}
+              />
             )}
           </View>
-
-          {/* Chỉ số tốc độ FPS */}
-          <View style={styles.metricsRow}>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Tốc độ Camera</Text>
-              <Text style={styles.metricValue}>
-                {statusData ? Number(statusData.camera_fps || 0).toFixed(1) : "--"}{" "}
-                <Text style={styles.metricUnit}>FPS</Text>
-              </Text>
-            </View>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Tốc độ AI</Text>
-              <Text style={styles.metricValue}>
-                {statusData ? Number(statusData.ai_fps || 0).toFixed(1) : "--"}{" "}
-                <Text style={styles.metricUnit}>FPS</Text>
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* 3. Điều khiển Servo & Bơm chữa cháy */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Điều khiển Servo & Bơm nước</Text>
-          </View>
-
-          <View style={styles.cardBody}>
-            {/* Điều khiển Servo */}
-            <View style={styles.rowBetween}>
-              <Text style={styles.sectionLabel}>Góc quay Camera (Servo)</Text>
-              <View style={styles.angleBadge}>
-                <Text style={styles.angleBadgeText}>
-                  {servoAngle == null ? "--°" : `${Math.round(Number(servoAngle))}°`}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.grid3}>
-              <TouchableOpacity
-                style={styles.btn}
-                disabled={busyKey !== null}
-                onPress={() => sendPost("servo-left", "/api/servo", { action: "left" })}
-              >
-                <Text style={styles.btnText}>← Trái</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.btn}
-                disabled={busyKey !== null}
-                onPress={() =>
-                  sendPost("servo-center", "/api/servo", { action: "center" })
-                }
-              >
-                <Text style={styles.btnText}>Giữa (90°)</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.btn}
-                disabled={busyKey !== null}
-                onPress={() =>
-                  sendPost("servo-right", "/api/servo", { action: "right" })
-                }
-              >
-                <Text style={styles.btnText}>Phải →</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.divider} />
-
-            {/* Điều khiển Bơm nước */}
-            <Text style={[styles.sectionLabel, { marginBottom: 8 }]}>
-              Bơm nước chữa cháy
-            </Text>
-
+          <View style={styles.fullscreenControls}>
             <TouchableOpacity
-              style={[styles.btnFull, autoArmed && styles.btnActiveGreen]}
-              disabled={busyKey !== null}
+              style={styles.btn}
+              onPress={() => sendPost("servo-left", "/api/servo", { action: "left" })}
+            >
+              <Text style={styles.btnText}>← Trái</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.btn}
               onPress={() =>
-                sendPost("pump-arm", "/api/pump/arm", { armed: !autoArmed })
+                sendPost("servo-center", "/api/servo", { action: "center" })
               }
             >
-              <Text
-                style={[
-                  styles.btnText,
-                  autoArmed && { color: "#07120d", fontWeight: "800" },
-                ]}
-              >
-                {autoArmed
-                  ? "✓ Đang bật phun tự động khi có lửa"
-                  : "Bật phun tự động khi có lửa"}
-              </Text>
+              <Text style={styles.btnText}>Giữa (90°)</Text>
             </TouchableOpacity>
-
-            <View style={styles.grid2}>
-              <TouchableOpacity
-                style={[styles.btn, styles.btnPrimary]}
-                disabled={busyKey !== null}
-                onPress={() => sendPost("pump-on", "/api/pump", { action: "on" })}
-              >
-                <Text style={styles.btnPrimaryText}>💦 Phun nước</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.btn, styles.btnDanger]}
-                disabled={busyKey !== null}
-                onPress={() => sendPost("pump-stop", "/api/pump", { action: "stop" })}
-              >
-                <Text style={styles.btnDangerText}>🛑 DỪNG BƠM</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text
-              style={[
-                styles.pumpStatusText,
-                isPumpOn && { color: "#ff5c5c", fontWeight: "700" },
-              ]}
-            >
-              {isPumpOn
-                ? `Bơm: ĐANG PHUN (${Number(pump.seconds_remaining || 0).toFixed(1)}s)`
-                : autoArmed
-                ? `Bơm: Chế độ tự động đang bật${
-                    Number(pump.cooldown_remaining || 0) > 0
-                      ? ` · chờ ${Math.ceil(Number(pump.cooldown_remaining))}s`
-                      : ""
-                  }`
-                : "Bơm: đang tắt."}
-            </Text>
-
-            <View style={styles.divider} />
-
-            {/* Kiểm tra Telegram */}
             <TouchableOpacity
-              style={styles.btnFull}
-              disabled={busyKey !== null}
-              onPress={() => sendPost("telegram-test", "/api/telegram/test")}
+              style={styles.btn}
+              onPress={() =>
+                sendPost("servo-right", "/api/servo", { action: "right" })
+              }
             >
-              <Text style={styles.btnText}>
-                {busyKey === "telegram-test"
-                  ? "Đang gửi tới Telegram..."
-                  : "📨 Gửi thử cảnh báo Telegram"}
-              </Text>
+              <Text style={styles.btnText}>Phải →</Text>
             </TouchableOpacity>
-
-            {actionMessage ? (
-              <Text style={styles.successMsg}>{actionMessage}</Text>
-            ) : null}
-            {errorMessage ? (
-              <Text style={styles.errorMsg}>{errorMessage}</Text>
-            ) : null}
+            <TouchableOpacity
+              style={[styles.btn, styles.btnPrimary]}
+              onPress={() => sendPost("pump-on", "/api/pump", { action: "on" })}
+            >
+              <Text style={styles.btnPrimaryText}>💦 Phun</Text>
+            </TouchableOpacity>
           </View>
-        </View>
-      </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Thanh Điều Hướng Đa Tab Dưới Cùng (Bottom Navigation Bar) */}
+      <View style={styles.tabBar}>
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === "monitor" && styles.tabItemActive]}
+          onPress={() => setActiveTab("monitor")}
+        >
+          <Text style={styles.tabIcon}>📹</Text>
+          <Text
+            style={[
+              styles.tabLabel,
+              activeTab === "monitor" && styles.tabLabelActive,
+            ]}
+          >
+            Giám sát
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === "history" && styles.tabItemActive]}
+          onPress={() => setActiveTab("history")}
+        >
+          <Text style={styles.tabIcon}>
+            🔔{historyList.length > 0 ? ` (${historyList.length})` : ""}
+          </Text>
+          <Text
+            style={[
+              styles.tabLabel,
+              activeTab === "history" && styles.tabLabelActive,
+            ]}
+          >
+            Nhật ký
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === "settings" && styles.tabItemActive]}
+          onPress={() => setActiveTab("settings")}
+        >
+          <Text style={styles.tabIcon}>⚙️</Text>
+          <Text
+            style={[
+              styles.tabLabel,
+              activeTab === "settings" && styles.tabLabelActive,
+            ]}
+          >
+            Cài đặt AI
+          </Text>
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
@@ -473,18 +946,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#0a0f18",
   },
-  container: {
-    padding: 14,
-    paddingBottom: 32,
-  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 12,
-    paddingBottom: 12,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#243144",
+    backgroundColor: "#0a0f18",
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   brandRow: {
     flexDirection: "row",
@@ -492,9 +968,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   brandIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 9,
     backgroundColor: "#ff5c5c22",
     borderWidth: 1,
     borderColor: "#ff5c5c55",
@@ -503,48 +979,350 @@ const styles = StyleSheet.create({
   },
   brandTitle: {
     color: "#edf2f8",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
   },
   ipText: {
-    color: "#5e9eff",
-    fontSize: 12,
-    marginTop: 2,
+    color: "#8c9aad",
+    fontSize: 11,
   },
-  connBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  vibrateChip: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
-    gap: 6,
   },
-  connOnline: {
-    backgroundColor: "#121b28",
+  vibrateOn: {
+    backgroundColor: "#3ddc9718",
     borderColor: "#3ddc9755",
   },
-  connOffline: {
-    backgroundColor: "#121b28",
-    borderColor: "#ff5c5c55",
+  vibrateOff: {
+    backgroundColor: "#ffffff0a",
+    borderColor: "#ffffff22",
+  },
+  vibrateChipText: {
+    color: "#edf2f8",
+    fontSize: 11,
+    fontWeight: "600",
   },
   connDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
-  connText: {
+  bannerWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+  },
+  banner: {
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+  },
+  bannerSafe: {
+    backgroundColor: "#3ddc9715",
+    borderColor: "#3ddc9744",
+  },
+  bannerSmoke: {
+    backgroundColor: "#ffb84d18",
+    borderColor: "#ffb84d55",
+  },
+  bannerFire: {
+    backgroundColor: "#ff5c5c28",
+    borderColor: "#ff5c5c99",
+  },
+  bannerOffline: {
+    backgroundColor: "#121b28",
+    borderColor: "#243144",
+  },
+  bannerTitle: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  bannerSub: {
+    color: "#c5d0de",
+    fontSize: 11,
+    marginTop: 3,
+  },
+  alertCountPill: {
+    backgroundColor: "#ff5c5c",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  alertCountText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  container: {
+    padding: 14,
+    paddingBottom: 24,
+  },
+  card: {
+    backgroundColor: "#121b28",
+    borderWidth: 1,
+    borderColor: "#243144",
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 14,
+  },
+  cardHeader: {
+    height: 44,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#ffffff12",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  cardHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  cardTitle: {
+    color: "#edf2f8",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  liveTag: {
+    color: "#ff5c5c",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  modeSwitchBtn: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: "#ffffff12",
+  },
+  modeSwitchText: {
+    color: "#c5d0de",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  videoBox: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    backgroundColor: "#070b12",
+  },
+  videoStream: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#070b12",
+  },
+  videoPlaceholder: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  placeholderText: {
+    color: "#8c9aad",
+    fontSize: 13,
+    marginTop: 10,
+    textAlign: "center",
+  },
+  metricsRow: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#ffffff10",
+  },
+  metricItem: {
+    flex: 1,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRightWidth: 1,
+    borderRightColor: "#ffffff0a",
+  },
+  metricLabel: {
+    color: "#8c9aad",
+    fontSize: 10,
+  },
+  metricValue: {
+    color: "#edf2f8",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  cardBody: {
+    padding: 14,
+  },
+  rowBetween: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  angleHighlight: {
+    color: "#5e9eff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  subHint: {
+    color: "#8c9aad",
+    fontSize: 11,
+  },
+  presetRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  presetBtn: {
+    flex: 1,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ffffff1a",
+    backgroundColor: "#ffffff08",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  presetBtnActive: {
+    backgroundColor: "#5e9eff",
+    borderColor: "#5e9eff",
+  },
+  presetBtnText: {
     color: "#c5d0de",
     fontSize: 12,
     fontWeight: "600",
   },
-  ipCard: {
-    backgroundColor: "#121b28",
+  grid3: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  grid2: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 8,
+  },
+  btn: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 9,
     borderWidth: 1,
-    borderColor: "#5e9eff55",
-    borderRadius: 12,
+    borderColor: "#ffffff1c",
+    backgroundColor: "#ffffff0a",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  btnFull: {
+    width: "100%",
+    minHeight: 42,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#ffffff1c",
+    backgroundColor: "#ffffff0a",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  btnActiveGreen: {
+    backgroundColor: "#3ddc97",
+    borderColor: "#3ddc97",
+  },
+  btnPrimary: {
+    backgroundColor: "#5e9eff22",
+    borderColor: "#5e9eff66",
+  },
+  btnDanger: {
+    backgroundColor: "#ff5c5c22",
+    borderColor: "#ff5c5c66",
+  },
+  btnText: {
+    color: "#edf2f8",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  btnPrimaryText: {
+    color: "#9ec5ff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  btnDangerText: {
+    color: "#ff9e9e",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#ffffff12",
+    marginVertical: 12,
+  },
+  pumpStatusText: {
+    color: "#8c9aad",
+    fontSize: 11,
+    marginTop: 10,
+  },
+  historyItem: {
     padding: 12,
-    marginBottom: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  historyFire: {
+    backgroundColor: "#ff5c5c18",
+    borderColor: "#ff5c5c55",
+  },
+  historySmoke: {
+    backgroundColor: "#ffb84d15",
+    borderColor: "#ffb84d55",
+  },
+  historyTitle: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  historyTime: {
+    color: "#c5d0de",
+    fontSize: 11,
+  },
+  historyMeta: {
+    color: "#c5d0de",
+    fontSize: 12,
+    marginTop: 4,
+  },
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  settingTitle: {
+    color: "#edf2f8",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  settingDesc: {
+    color: "#8c9aad",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  stepperRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  stepperBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: "#ffffff14",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperBtnText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  stepperValue: {
+    color: "#5e9eff",
+    fontSize: 14,
+    fontWeight: "800",
+    minWidth: 42,
+    textAlign: "center",
   },
   ipLabel: {
     color: "#c5d0de",
@@ -578,245 +1356,76 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 13,
   },
-  banner: {
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    marginBottom: 14,
-  },
-  bannerSafe: {
-    backgroundColor: "#3ddc9715",
-    borderColor: "#3ddc9744",
-  },
-  bannerSmoke: {
-    backgroundColor: "#ffb84d18",
-    borderColor: "#ffb84d55",
-  },
-  bannerFire: {
-    backgroundColor: "#ff5c5c24",
-    borderColor: "#ff5c5c88",
-  },
-  bannerOffline: {
-    backgroundColor: "#121b28",
-    borderColor: "#243144",
-  },
-  bannerTitle: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  bannerSub: {
-    color: "#c5d0de",
-    fontSize: 12,
-    marginTop: 4,
-  },
-  card: {
-    backgroundColor: "#121b28",
-    borderWidth: 1,
-    borderColor: "#243144",
-    borderRadius: 14,
-    overflow: "hidden",
-    marginBottom: 14,
-  },
-  cardHeader: {
-    height: 44,
-    paddingHorizontal: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#ffffff12",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  cardHeaderRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  cardTitle: {
-    color: "#edf2f8",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  liveTag: {
-    color: "#ff5c5c",
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  modeSwitchBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: "#ffffff10",
-  },
-  modeSwitchText: {
-    color: "#8c9aad",
-    fontSize: 11,
-  },
-  videoBox: {
-    width: "100%",
-    aspectRatio: 4 / 3,
-    backgroundColor: "#070b12",
-  },
-  videoStream: {
-    flex: 1,
-    width: "100%",
-    height: "100%",
-    backgroundColor: "#070b12",
-  },
-  videoPlaceholder: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
-  },
-  placeholderText: {
-    color: "#8c9aad",
-    fontSize: 13,
-    marginTop: 10,
-    textAlign: "center",
-  },
-  changeIpHintBtn: {
-    marginTop: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#5e9eff55",
-    backgroundColor: "#5e9eff18",
-  },
-  changeIpHintText: {
-    color: "#8ab8ff",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  metricsRow: {
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: "#ffffff10",
-  },
-  metricItem: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRightWidth: 1,
-    borderRightColor: "#ffffff0a",
-  },
-  metricLabel: {
-    color: "#8c9aad",
-    fontSize: 11,
-  },
-  metricValue: {
-    color: "#edf2f8",
-    fontSize: 18,
-    fontWeight: "700",
-    marginTop: 2,
-  },
-  metricUnit: {
-    color: "#8c9aad",
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  cardBody: {
-    padding: 14,
-  },
-  rowBetween: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  sectionLabel: {
-    color: "#c5d0de",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  angleBadge: {
-    backgroundColor: "#ffffff12",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  angleBadgeText: {
-    color: "#edf2f8",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  grid3: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  grid2: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 8,
-  },
-  btn: {
-    flex: 1,
-    minHeight: 42,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: "#ffffff1c",
-    backgroundColor: "#ffffff0a",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-  },
-  btnFull: {
-    width: "100%",
-    minHeight: 42,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: "#ffffff1c",
-    backgroundColor: "#ffffff0a",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
-  },
-  btnActiveGreen: {
-    backgroundColor: "#3ddc97",
-    borderColor: "#3ddc97",
-  },
-  btnPrimary: {
-    backgroundColor: "#5e9eff22",
-    borderColor: "#5e9eff66",
-  },
-  btnDanger: {
-    backgroundColor: "#ff5c5c22",
-    borderColor: "#ff5c5c66",
-  },
-  btnText: {
-    color: "#edf2f8",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  btnPrimaryText: {
-    color: "#9ec5ff",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  btnDangerText: {
-    color: "#ff9e9e",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  divider: {
-    height: 1,
-    backgroundColor: "#ffffff12",
-    marginVertical: 14,
-  },
-  pumpStatusText: {
-    color: "#8c9aad",
-    fontSize: 12,
-    marginTop: 10,
-  },
   successMsg: {
     color: "#3ddc97",
     fontSize: 12,
-    marginTop: 10,
+    textAlign: "center",
+    marginTop: 4,
   },
   errorMsg: {
     color: "#ff7b7b",
     fontSize: 12,
-    marginTop: 10,
+    textAlign: "center",
+    marginTop: 4,
+  },
+  tabBar: {
+    flexDirection: "row",
+    height: 58,
+    borderTopWidth: 1,
+    borderTopColor: "#243144",
+    backgroundColor: "#101824",
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabItemActive: {
+    borderTopWidth: 2,
+    borderTopColor: "#5e9eff",
+    backgroundColor: "#5e9eff10",
+  },
+  tabIcon: {
+    fontSize: 15,
+    color: "#edf2f8",
+  },
+  tabLabel: {
+    fontSize: 11,
+    color: "#8c9aad",
+    marginTop: 2,
+    fontWeight: "600",
+  },
+  tabLabelActive: {
+    color: "#5e9eff",
+    fontWeight: "700",
+  },
+  fullscreenModal: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  fullscreenHeader: {
+    height: 50,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#0a0f18",
+  },
+  closeFullBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#ff5c5c33",
+  },
+  closeFullBtnText: {
+    color: "#ff9e9e",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  fullscreenControls: {
+    flexDirection: "row",
+    gap: 8,
+    padding: 12,
+    backgroundColor: "#0a0f18",
   },
 });

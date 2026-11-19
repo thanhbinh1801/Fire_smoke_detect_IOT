@@ -1,5 +1,6 @@
 """Flask dashboard and shared camera/inference/alarm runtime."""
 
+from collections import deque
 import logging
 import os
 import threading
@@ -12,6 +13,7 @@ import config
 import display
 from actuators import CameraServo, WaterPump
 from notifier import TelegramNotifier
+from preprocessing import FramePreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,13 @@ class FireMonitor:
         self._stop_event = threading.Event()
         self._thread = None
         self._camera = None
+        self._detector = None
+        self._alarm_confirmer = None
+        self._smoke_confirmer = None
         self._servo = None
         self._pump = None
+        self._history = deque(maxlen=30)
+        self._last_history_at = {"fire": 0.0, "smoke": 0.0}
         self._last_control_at = time.monotonic()
         self._notifier = TelegramNotifier()
         self._state = {
@@ -105,6 +112,9 @@ class FireMonitor:
             snapshot_saver = AsyncSnapshotSaver()
             with self._lock:
                 self._camera = camera
+                self._detector = detector
+                self._alarm_confirmer = alarm_confirmer
+                self._smoke_confirmer = smoke_confirmer
                 self._servo = servo
                 self._pump = pump
                 self._last_control_at = time.monotonic()
@@ -191,6 +201,7 @@ class FireMonitor:
                     )
                     if has_new_result:
                         if confirmed_fire and fire_detections:
+                            self._record_history_event("fire", fire_detections, now)
                             self._notifier.notify(
                                 "fire",
                                 frame,
@@ -204,6 +215,7 @@ class FireMonitor:
                             if (
                                 smoke_votes >= required_smoke_votes or confirmed_smoke
                             ) and not confirmed_fire:
+                                self._record_history_event("smoke", smoke_detections, now)
                                 self._notifier.notify(
                                     "smoke",
                                     frame,
@@ -327,11 +339,102 @@ class FireMonitor:
     def _touch_control(self):
         self._last_control_at = time.monotonic()
 
+    def _record_history_event(self, event_type: str, items: list, now: float):
+        with self._lock:
+            if now - self._last_history_at.get(event_type, 0.0) < 5.0:
+                return
+            self._last_history_at[event_type] = now
+            max_conf = max((float(d.get("conf", 0.0)) for d in items), default=0.0)
+            self._history.appendleft(
+                {
+                    "id": f"{int(now * 1000)}",
+                    "type": event_type,
+                    "count": len(items),
+                    "max_conf": round(max_conf, 3),
+                    "timestamp": now,
+                    "time_str": time.strftime("%H:%M:%S - %d/%m", time.localtime(now)),
+                }
+            )
+
+    def get_settings(self):
+        with self._lock:
+            det = self._detector
+        if det is None:
+            return {
+                "confidence_threshold": getattr(config, "CONFIDENCE_THRESHOLD", 0.40),
+                "fire_confidence_threshold": getattr(config, "FIRE_CONFIDENCE_THRESHOLD", 0.40),
+                "smoke_confidence_threshold": getattr(config, "SMOKE_CONFIDENCE_THRESHOLD", 0.38),
+                "roi_zoom_enabled": getattr(config, "ROI_ZOOM_ENABLED", True),
+                "enable_clahe": getattr(config, "PREPROCESS_ENABLE_CLAHE", False),
+                "gamma": getattr(config, "PREPROCESS_GAMMA", 1.0),
+                "auto_wb": getattr(config, "PREPROCESS_AUTO_WB", False),
+                "sharpen": getattr(config, "PREPROCESS_SHARPEN", False),
+            }
+        prep = det.preprocessor
+        return {
+            "confidence_threshold": round(float(det.conf_threshold), 2),
+            "fire_confidence_threshold": round(float(det.fire_conf_threshold), 2),
+            "smoke_confidence_threshold": round(float(det.smoke_conf_threshold), 2),
+            "roi_zoom_enabled": bool(det.roi_zoom_enabled),
+            "enable_clahe": bool(prep.enable_clahe),
+            "gamma": round(float(prep.gamma), 2),
+            "auto_wb": bool(prep.auto_wb),
+            "sharpen": bool(prep.sharpen),
+        }
+
+    def update_settings(self, payload: dict):
+        with self._lock:
+            det = self._detector
+            alarm_c = self._alarm_confirmer
+            smoke_c = self._smoke_confirmer
+        if det is None:
+            return False, "Detector chưa sẵn sàng."
+        self._touch_control()
+        prep = det.preprocessor
+        if "fire_confidence_threshold" in payload:
+            val = max(0.10, min(0.95, float(payload["fire_confidence_threshold"])))
+            det.fire_conf_threshold = val
+            det.conf_threshold = val
+            config.FIRE_CONFIDENCE_THRESHOLD = val
+            config.CONFIDENCE_THRESHOLD = val
+            if alarm_c is not None:
+                alarm_c.threshold = val
+        if "smoke_confidence_threshold" in payload:
+            val = max(0.10, min(0.95, float(payload["smoke_confidence_threshold"])))
+            det.smoke_conf_threshold = val
+            config.SMOKE_CONFIDENCE_THRESHOLD = val
+            if smoke_c is not None:
+                smoke_c.threshold = val
+        if "roi_zoom_enabled" in payload:
+            det.roi_zoom_enabled = bool(payload["roi_zoom_enabled"])
+            config.ROI_ZOOM_ENABLED = det.roi_zoom_enabled
+        if "enable_clahe" in payload:
+            prep.enable_clahe = bool(payload["enable_clahe"])
+            config.PREPROCESS_ENABLE_CLAHE = prep.enable_clahe
+        if "auto_wb" in payload:
+            prep.auto_wb = bool(payload["auto_wb"])
+            config.PREPROCESS_AUTO_WB = prep.auto_wb
+        if "sharpen" in payload:
+            prep.sharpen = bool(payload["sharpen"])
+            config.PREPROCESS_SHARPEN = prep.sharpen
+        if "gamma" in payload:
+            g_val = max(0.4, min(2.5, float(payload["gamma"])))
+            prep.gamma = g_val
+            prep._gamma_lut = FramePreprocessor._build_gamma_lut(g_val)
+            config.PREPROCESS_GAMMA = g_val
+        return True, "Đã cập nhật cấu hình AI & Tiền xử lý trực tiếp!"
+
+    def clear_history(self):
+        with self._lock:
+            self._history.clear()
+        return True, "Đã xóa nhật ký cảnh báo."
+
     def get_status(self):
         with self._lock:
             state = dict(self._state)
             servo = self._servo
             pump = self._pump
+            history = list(self._history)
         state["camera_source"] = getattr(config, "CAMERA_SOURCE", "usb")
         state["servo"] = (
             servo.get_state()
@@ -353,6 +456,8 @@ class FireMonitor:
         )
         state["auto_armed"] = bool(pump.is_armed()) if pump is not None else False
         state["telegram"] = self._notifier.get_status()
+        state["history"] = history
+        state["settings"] = self.get_settings()
         return state
 
     def test_telegram(self):
@@ -550,6 +655,30 @@ def create_app(monitor=None):
     def telegram_test():
         ok, message = app.monitor.test_telegram()
         return jsonify({"ok": ok, "message": message}), (200 if ok else 400)
+
+    @app.get("/api/settings")
+    def get_settings():
+        return jsonify({"ok": True, "settings": app.monitor.get_settings()})
+
+    @app.post("/api/settings")
+    def update_settings():
+        payload = request.get_json(silent=True) or {}
+        ok, message = app.monitor.update_settings(payload)
+        return (
+            jsonify(
+                {
+                    "ok": ok,
+                    "message": message,
+                    "settings": app.monitor.get_settings(),
+                }
+            ),
+            (200 if ok else 400),
+        )
+
+    @app.post("/api/history/clear")
+    def clear_history():
+        ok, message = app.monitor.clear_history()
+        return jsonify({"ok": ok, "message": message})
 
     @app.post("/api/restart")
     def restart():
