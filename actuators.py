@@ -81,7 +81,7 @@ class _SysfsPWMServo:
 
 def _patch_lgpio_pwm_pin(servo_device):
     try:
-        import lgpio
+        import lgpio  # type: ignore[import-not-found]
     except ImportError:
         return
     pin = getattr(getattr(servo_device, "pwm_device", None), "pin", None)

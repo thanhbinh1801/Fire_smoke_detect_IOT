@@ -18,7 +18,7 @@ def load_env_file(dotenv_path: str = ENV_FILE_PATH, override: bool = False) -> b
     để hệ thống luôn chạy được ngay cả khi chưa cài python-dotenv.
     """
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
 
         if os.path.exists(dotenv_path):
             load_dotenv(dotenv_path=dotenv_path, override=override, encoding="utf-8")
