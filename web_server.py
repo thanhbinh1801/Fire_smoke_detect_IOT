@@ -2,6 +2,7 @@
 
 from collections import deque
 import logging
+import math
 import os
 import threading
 import time
@@ -11,7 +12,8 @@ from flask import Flask, Response, jsonify, render_template, request
 
 import config
 import display
-from actuators import CameraServo, WaterPump
+from actuators import CameraServo, NozzleServo, WaterPump
+from aiming import NozzleController, number
 from notifier import TelegramNotifier
 from preprocessing import FramePreprocessor
 
@@ -30,14 +32,22 @@ class FireMonitor:
         self._smoke_confirmer = None
         self._servo = None
         self._pump = None
+        self._nozzle = NozzleController()
         self._history = deque(maxlen=30)
         self._last_history_at = {"fire": 0.0, "smoke": 0.0}
         self._last_control_at = time.monotonic()
         self._notifier = TelegramNotifier()
+        actuator_mode = "real" if config.PLATFORM == "pi" else "simulated"
         self._state = {
             "status": "starting",
             "error": None,
             "platform": config.PLATFORM,
+            "actuator_mode": actuator_mode,
+            "actuator_mode_label": (
+                "GPIO thật · Raspberry Pi"
+                if actuator_mode == "real"
+                else "Mô phỏng · Laptop"
+            ),
             "camera_source": getattr(config, "CAMERA_SOURCE", "usb"),
             "model": config.MODEL_PATH,
             "camera_fps": 0.0,
@@ -89,13 +99,16 @@ class FireMonitor:
     def _run(self):
         camera = detector = alert = servo = pump = None
         async_detector = None
+        logger.info(
+            "Chế độ actuator: %s",
+            "GPIO thật trên Raspberry Pi" if config.PLATFORM == "pi" else "mô phỏng trên laptop",
+        )
         try:
             from alert import AlertSystem
             from camera import FireCamera
             from confirmation import (
                 AsyncSnapshotSaver,
                 build_alarm_confirmer,
-                build_pump_confirmer,
                 build_smoke_confirmer,
             )
             from detector import AsyncFireDetector, FireSmokeDetector
@@ -104,11 +117,10 @@ class FireMonitor:
             detector = FireSmokeDetector()
             async_detector = AsyncFireDetector(detector)
             alert = AlertSystem()
-            servo = CameraServo()
+            servo = NozzleServo()
             pump = WaterPump()
             alarm_confirmer = build_alarm_confirmer()
             smoke_confirmer = build_smoke_confirmer()
-            pump_confirmer = build_pump_confirmer()
             snapshot_saver = AsyncSnapshotSaver()
             with self._lock:
                 self._camera = camera
@@ -134,9 +146,6 @@ class FireMonitor:
             confirmed_fire = False
             smoke_votes = 0
             cached_detections = []
-            watchdog_seconds = float(
-                getattr(config, "ACTUATOR_WATCHDOG_SECONDS", 600.0)
-            )
             stream_interval = 1.0 / max(1, int(getattr(config, "WEB_STREAM_FPS", 12)))
             next_stream_at = 0.0
             loop_interval = 1.0 / max(1, int(getattr(config, "CAMERA_FPS", 30)))
@@ -171,7 +180,7 @@ class FireMonitor:
                     self._stop_event.wait(0.005)
                     continue
 
-                detections, ai_fps, result_time, inference_error = async_detector.get_result()
+                detections, ai_fps, result_time, inference_error, result_frame_time = async_detector.get_result(include_frame_time=True)
                 now = time.time()
                 fire_detections = [
                     detection for detection in detections
@@ -229,26 +238,12 @@ class FireMonitor:
                     if not confirmed_fire and not detections:
                         cached_detections = []
 
-                    if has_new_result and pump_confirmer.update(
-                        detections, now=now, result_time=result_time
-                    ):
-                        ok, message = pump.spray("auto", automatic=True)
-                        if ok:
-                            pump_confirmer.reset()
-                            logger.warning("Phun tự động: %s", message)
+
+                self._advance_nozzle(detections, result_time, result_frame_time,
+                                     frame.shape, servo, pump, inference_error)
 
                 alert.set_fire_led(confirmed_fire)
                 alert.set_buzzer(confirmed_fire)
-
-                if (
-                    pump.is_armed()
-                    and time.monotonic() - self._last_control_at > watchdog_seconds
-                ):
-                    pump.arm(False)
-                    logger.warning(
-                        "Không có điều khiển từ web trong %.0fs - tự disarm phun tự động.",
-                        watchdog_seconds,
-                    )
 
                 elapsed = time.monotonic() - fps_started
                 if elapsed >= 1.0:
@@ -273,6 +268,7 @@ class FireMonitor:
                     confirmed_fire=confirmed_fire,
                 )
                 self._update_state(
+                    frame_size=[frame.shape[1], frame.shape[0]],
                     camera_fps=round(camera_fps, 1),
                     ai_fps=round(ai_fps, 1),
                     fire_detected=confirmed_fire,
@@ -339,6 +335,14 @@ class FireMonitor:
     def _touch_control(self):
         self._last_control_at = time.monotonic()
 
+    def _advance_nozzle(self, detections, result_time, frame_time, shape, servo, pump, error=None):
+        with self._lock:
+            # Evaluate expiry before any automatic actuation.
+            if pump.is_armed() and time.monotonic() - self._last_control_at > config.ACTUATOR_WATCHDOG_SECONDS:
+                pump.arm(False)
+                self._nozzle.cancel("Watchdog: tự disarm")
+            self._nozzle.update(detections, result_time, frame_time, shape, servo, pump, error)
+
     def _record_history_event(self, event_type: str, items: list, now: float):
         with self._lock:
             if now - self._last_history_at.get(event_type, 0.0) < 5.0:
@@ -383,46 +387,91 @@ class FireMonitor:
         }
 
     def update_settings(self, payload: dict):
+        allowed_keys = {
+            "fire_confidence_threshold",
+            "smoke_confidence_threshold",
+            "roi_zoom_enabled",
+            "enable_clahe",
+            "auto_wb",
+            "sharpen",
+            "gamma",
+        }
+        if not isinstance(payload, dict) or not payload:
+            return False, "Cần gửi ít nhất một thiết lập hợp lệ."
+        if set(payload) - allowed_keys:
+            return False, "Có thiết lập không được hỗ trợ."
+
+        validated = {}
+        for key in ("fire_confidence_threshold", "smoke_confidence_threshold"):
+            if key in payload:
+                value = payload[key]
+                if isinstance(value, bool):
+                    return False, f"{key} phải là số trong khoảng 0.10–0.95."
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    return False, f"{key} phải là số trong khoảng 0.10–0.95."
+                if not math.isfinite(value) or not 0.10 <= value <= 0.95:
+                    return False, f"{key} phải nằm trong khoảng 0.10–0.95."
+                validated[key] = value
+
+        if "gamma" in payload:
+            value = payload["gamma"]
+            if isinstance(value, bool):
+                return False, "gamma phải là số trong khoảng 0.40–2.50."
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return False, "gamma phải là số trong khoảng 0.40–2.50."
+            if not math.isfinite(value) or not 0.40 <= value <= 2.50:
+                return False, "gamma phải nằm trong khoảng 0.40–2.50."
+            validated["gamma"] = value
+
+        for key in ("roi_zoom_enabled", "enable_clahe", "auto_wb", "sharpen"):
+            if key in payload:
+                if not isinstance(payload[key], bool):
+                    return False, f"{key} phải là true hoặc false."
+                validated[key] = payload[key]
+
         with self._lock:
             det = self._detector
             alarm_c = self._alarm_confirmer
             smoke_c = self._smoke_confirmer
         if det is None:
             return False, "Detector chưa sẵn sàng."
-        self._touch_control()
         prep = det.preprocessor
-        if "fire_confidence_threshold" in payload:
-            val = max(0.10, min(0.95, float(payload["fire_confidence_threshold"])))
+        if "fire_confidence_threshold" in validated:
+            val = validated["fire_confidence_threshold"]
             det.fire_conf_threshold = val
             det.conf_threshold = val
             config.FIRE_CONFIDENCE_THRESHOLD = val
             config.CONFIDENCE_THRESHOLD = val
             if alarm_c is not None:
                 alarm_c.threshold = val
-        if "smoke_confidence_threshold" in payload:
-            val = max(0.10, min(0.95, float(payload["smoke_confidence_threshold"])))
+        if "smoke_confidence_threshold" in validated:
+            val = validated["smoke_confidence_threshold"]
             det.smoke_conf_threshold = val
             config.SMOKE_CONFIDENCE_THRESHOLD = val
             if smoke_c is not None:
                 smoke_c.threshold = val
-        if "roi_zoom_enabled" in payload:
-            det.roi_zoom_enabled = bool(payload["roi_zoom_enabled"])
+        if "roi_zoom_enabled" in validated:
+            det.roi_zoom_enabled = validated["roi_zoom_enabled"]
             config.ROI_ZOOM_ENABLED = det.roi_zoom_enabled
-        if "enable_clahe" in payload:
-            prep.enable_clahe = bool(payload["enable_clahe"])
+        if "enable_clahe" in validated:
+            prep.enable_clahe = validated["enable_clahe"]
             config.PREPROCESS_ENABLE_CLAHE = prep.enable_clahe
-        if "auto_wb" in payload:
-            prep.auto_wb = bool(payload["auto_wb"])
+        if "auto_wb" in validated:
+            prep.auto_wb = validated["auto_wb"]
             config.PREPROCESS_AUTO_WB = prep.auto_wb
-        if "sharpen" in payload:
-            prep.sharpen = bool(payload["sharpen"])
+        if "sharpen" in validated:
+            prep.sharpen = validated["sharpen"]
             config.PREPROCESS_SHARPEN = prep.sharpen
-        if "gamma" in payload:
-            g_val = max(0.4, min(2.5, float(payload["gamma"])))
+        if "gamma" in validated:
+            g_val = validated["gamma"]
             prep.gamma = g_val
             prep._gamma_lut = FramePreprocessor._build_gamma_lut(g_val)
             config.PREPROCESS_GAMMA = g_val
-        return True, "Đã cập nhật cấu hình AI & Tiền xử lý trực tiếp!"
+        return True, "Đã cập nhật thiết lập AI cho phiên chạy hiện tại; thay đổi mất khi khởi động lại."
 
     def clear_history(self):
         with self._lock:
@@ -458,7 +507,52 @@ class FireMonitor:
         state["telegram"] = self._notifier.get_status()
         state["history"] = history
         state["settings"] = self.get_settings()
+        with self._lock:
+            state["nozzle"] = self._nozzle.state()
         return state
+
+    def nozzle_action(self, payload):
+        if not isinstance(payload, dict):
+            return False, "Cần gửi một đối tượng JSON."
+        with self._lock:
+            servo, pump = self._servo, self._pump
+            action = payload.get("action")
+            try:
+                if action == "calibrate":
+                    if pump is not None:
+                        pump.arm(False)
+                        pump.stop()
+                    self._nozzle.save(payload.get("calibration"))
+                elif action == "dry_run":
+                    if not isinstance(payload.get("enabled"), bool):
+                        raise ValueError("enabled phải là boolean")
+                    if pump is not None:
+                        pump.arm(False)
+                        pump.stop()
+                    self._nozzle.dry_run = payload["enabled"]
+                    self._nozzle.cancel("Đã đổi chế độ; cần arm lại")
+                elif action == "aim":
+                    if servo is None or pump is None:
+                        raise ValueError("Cơ cấu chưa sẵn sàng")
+                    # Manual aim always takes control away from automatic spraying.
+                    pump.arm(False)
+                    pump.stop()
+                    self._nozzle.cancel()
+                    if "u" in payload:
+                        size = self._state.get("frame_size")
+                        if not size:
+                            raise ValueError("Chưa có khung hình camera")
+                        x, y = self._nozzle.calibration.image_to_floor(payload["u"], payload.get("v"), size[0]/size[1])
+                    else:
+                        x, y = number(payload.get("x")), number(payload.get("y"))
+                    aimed = self._nozzle.aim(x, y, servo)
+                    self._nozzle.message = f"Ngắm ({x:.1f}, {y:.1f}) cm; pan {aimed['pan']:.1f}°, tilt {aimed['tilt']:.1f}°"
+                else:
+                    raise ValueError("Thao tác vòi không hợp lệ")
+            except (TypeError, ValueError, OSError) as exc:
+                return False, str(exc)
+            self._touch_control()
+            return True, self._nozzle.message
 
     def test_telegram(self):
         with self._lock:
@@ -469,6 +563,8 @@ class FireMonitor:
         return self._notifier.send_test(frame=frame, fps=fps, ai_fps=ai_fps)
 
     def servo_action(self, payload):
+        if not isinstance(payload, dict):
+            return False, "Cần gửi một đối tượng JSON."
         action = str((payload or {}).get("action", "")).strip().lower()
         with self._lock:
             servo = self._servo
@@ -477,16 +573,23 @@ class FireMonitor:
 
         self._touch_control()
         try:
-            if action == "left":
-                angle = servo.step(-1)
-            elif action == "right":
-                angle = servo.step(+1)
-            elif action == "center":
-                angle = servo.center()
-            elif action == "set":
-                angle = servo.set_angle(float((payload or {}).get("angle")))
-            else:
-                return False, "Thao tác servo không hợp lệ."
+            with self._lock:
+                if self._pump is not None:
+                    self._pump.arm(False)
+                    self._pump.stop()
+                self._nozzle.cancel()
+                if action == "left":
+                    angle = servo.step(-1)
+                elif action == "right":
+                    angle = servo.step(+1)
+                elif action in ("up", "down") and isinstance(servo, NozzleServo):
+                    angle = servo.step(-1 if action == "up" else 1, axis="tilt")
+                elif action == "center":
+                    angle = servo.center()
+                elif action == "set":
+                    angle = servo.set_angle(number(payload.get("angle")))
+                else:
+                    return False, "Thao tác servo không hợp lệ."
         except (TypeError, ValueError):
             return False, "Góc servo không hợp lệ."
 
@@ -502,10 +605,19 @@ class FireMonitor:
             return False, "Bơm chưa sẵn sàng."
 
         self._touch_control()
-        if action == "on":
-            return pump.spray("manual", automatic=False)
-        if action in ("off", "stop"):
-            return pump.stop()
+        with self._lock:
+            if action == "on":
+                if self._nozzle.dry_run:
+                    return False, "Chế độ ngắm khô đang khóa bơm."
+                if self._servo is None or self._servo.is_moving():
+                    return False, "Chờ vòi ổn định trước khi phun."
+                pump.arm(False)
+                self._nozzle.cancel()
+                return pump.spray("manual", automatic=False, duration=config.NOZZLE_BURST_SECONDS)
+            if action in ("off", "stop"):
+                pump.arm(False)
+                self._nozzle.cancel("Đã dừng và disarm")
+                return pump.stop()
         return False, "Thao tác bơm không hợp lệ."
 
     def set_auto_arm(self, enabled):
@@ -514,7 +626,11 @@ class FireMonitor:
         if pump is None:
             return False, "Bơm chưa sẵn sàng."
         self._touch_control()
-        armed = pump.arm(enabled)
+        with self._lock:
+            if enabled and isinstance(self._servo, NozzleServo) and not self._nozzle.calibration.ready:
+                return False, "Cần hiệu chuẩn bốn góc sàn trước khi arm."
+            self._nozzle.cancel()
+            armed = pump.arm(enabled)
         if armed:
             return True, "Đã bật phun tự động khi xác nhận có lửa."
         return True, "Đã tắt phun tự động."
@@ -571,9 +687,17 @@ def create_app(monitor=None):
 
     @app.after_request
     def add_cors_headers(response):
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        allowed_origins = {
+            origin.strip().rstrip("/")
+            for origin in str(getattr(config, "CORS_ALLOWED_ORIGINS", "")).split(",")
+            if origin.strip()
+        }
+        request_origin = request.headers.get("Origin", "").rstrip("/")
+        if request_origin and request_origin in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = request_origin
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            response.headers.add("Vary", "Origin")
         return response
 
     @app.get("/")
@@ -617,6 +741,11 @@ def create_app(monitor=None):
             jsonify({"ok": ok, "message": message, "servo": status["servo"]}),
             (200 if ok else 400),
         )
+
+    @app.post("/api/nozzle")
+    def nozzle_control():
+        ok, message = app.monitor.nozzle_action(request.get_json(silent=True))
+        return jsonify({"ok": ok, "message": message}), (200 if ok else 400)
 
     @app.post("/api/pump")
     def pump_control():

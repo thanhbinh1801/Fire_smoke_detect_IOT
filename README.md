@@ -85,7 +85,9 @@ v4l2-ctl --list-formats-ext -d /dev/video0
 
 ## Cấu hình
 
-Các thiết lập chính trong `config.py`:
+Sao chép `.env.example` thành `.env` để ghi đè cấu hình. `PLATFORM=auto` tự nhận diện Raspberry Pi từ device tree (hoặc Linux ARM khi device tree không có); có thể đặt tường minh `PLATFORM=pi` hoặc `PLATFORM=laptop`. Dashboard hiển thị rõ chế độ GPIO thật hay mô phỏng.
+
+Các thiết lập chính (giá trị trong `.env` được ưu tiên):
 
 - `PLATFORM = "pi"`, `CAMERA_SOURCE = "usb"`: Pi dùng webcam USB.
 - `WEBCAM_INDEX = 0`: đổi nếu webcam không phải `/dev/video0`.
@@ -94,11 +96,15 @@ Các thiết lập chính trong `config.py`:
 - `PUMP_CONFIDENCE_THRESHOLD = 0.60`: ngưỡng riêng để phun nước (cao hơn để giảm báo động giả).
 - `PUMP_CONFIRM_WINDOW_SECONDS = 3.0`, `PUMP_CONFIRM_MIN_RATIO = 0.7`, `PUMP_CONFIRM_MIN_SAMPLES = 8`: cửa sổ xác nhận trước khi phun tự động.
 - `PUMP_MAX_SECONDS = 5.0`, `PUMP_COOLDOWN = 15.0`, `PUMP_MAX_PER_MINUTE = 4`: giới hạn an toàn của bơm.
-- `SERVO_PIN = 18`, `SERVO_MIN_ANGLE = 30`, `SERVO_MAX_ANGLE = 150`, `SERVO_SETTLE_SECONDS = 0.6`: giới hạn pan camera và tự detach PWM sau khi quay để chống rung.
+- `NOZZLE_PAN_PIN = 18`, `NOZZLE_TILT_PIN = 19`: tín hiệu servo trái/phải và lên/xuống của vòi (số BCM).
+- `NOZZLE_CAMERA_OFFSET_X_CM`, `NOZZLE_CAMERA_OFFSET_Y_CM`: độ lệch camera so với vòi theo trục sàn, đơn vị cm; dùng làm giá trị hiệu chuẩn ban đầu.
+- `SERVO_SETTLE_SECONDS = 0.8`: thời gian chờ servo ổn định; các biến `SERVO_*` còn dùng cho lớp servo tương thích cũ.
 - `PUMP_PIN = 23`, `PUMP_ACTIVE_HIGH = True`: chân relay và mức kích.
 - `ACTUATOR_WATCHDOG_SECONDS = 600`: tự disarm phun tự động nếu không có thao tác điều khiển thật từ web trong 10 phút (việc mở tab poll `/api/status` không reset bộ đếm).
 - `DISPLAY_FPS = 15`: giới hạn tần suất vẽ overlay ở `main.py` để nhường CPU cho ONNX.
 - `SAVE_SNAPSHOT`: lưu ảnh khi có lửa (mặc định tắt).
+- Thiết lập AI trên app di động chỉ áp dụng trong phiên chạy hiện tại, không ghi lại vào `.env` và không thay đổi giới hạn an toàn bơm/servo.
+- `CORS_ALLOWED_ORIGINS`: danh sách origin chính xác, phân cách bằng dấu phẩy, chỉ cần cấu hình nếu dùng Expo Web. App Expo native và dashboard cùng origin không cần CORS; không dùng `*`.
 
 ## Chạy giao diện web
 
@@ -131,6 +137,157 @@ Chế độ cửa sổ OpenCV cũ vẫn chạy được bằng `python main.py`,
 - `POST /api/camera/<action>`: lấy nét/đảo màu (lấy nét chỉ có tác dụng với camera CSI).
 - `POST /api/telegram/test`: gửi ảnh và tin nhắn kiểm tra về Telegram Bot.
 - `POST /api/restart`: khởi động lại pipeline.
+
+## Demo vòi nước hai SG90, camera cố định
+
+Web dashboard hiện điều khiển hai servo của **vòi nước**, không quay webcam.
+Kích thước hiệu chuẩn ban đầu: sàn 43 × 31 cm, đầu vòi cao 29 cm, webcam cao
+36 cm, vị trí XY của cả hai tạm đặt tại tâm sàn (21.5, 15.5). Đo lại khi lắp.
+
+### Cấu hình phần cứng trước khi chạy
+
+- Cấp nguồn 5V riêng cho hai servo, GND chung với Raspberry Pi; dây tín hiệu về GPIO.
+  Bơm dùng nguồn 12V qua tiếp điểm relay, không cấp 12V vào Pi/servo.
+- Chốt đấu dây: `NOZZLE_PAN_PIN=18` cho servo trái/phải và `NOZZLE_TILT_PIN=19`
+  cho servo lên/xuống. Giá trị này đã có trong `config.py`, `.env.example` và `.env`
+  cục bộ. `.env` được git bỏ qua; khi chép sang Pi, dùng `.env.example` hoặc cập nhật
+  hai dòng này trong `.env` của Pi. GPIO13 không được dùng cho servo thứ hai vì ghi
+  chú phần cứng trước đó có tải đang cắm ở chân này.
+- Đặt `NOZZLE_{PAN,TILT}_{MIN,MAX,ZERO}` theo giới hạn và vị trí lắp tay servo.
+  ZERO của tilt là vòi thẳng xuống; ZERO của pan là hướng +X của cơ cấu.
+  Mặc định giới hạn 30–150°; **không đảm bảo phủ toàn sàn với mọi cách lắp**.
+  Chỉ mở rộng giới hạn sau khi đã thử cơ khí với ống nước gắn đầy đủ.
+- Hai servo dùng hai đầu ra `gpiozero` độc lập, giữ bản vá duty cycle `lgpio`.
+  Không dùng lại backend sysfs channel 0 cho cả hai chân. Nếu Pi đang bật overlay
+  PWM chiếm các chân này, cần giải phóng chân/đổi cấu hình trước khi chạy.
+- `NOZZLE_HOLD_POSITION=false` mặc định detach sau thời gian ổn định như cơ chế cũ.
+  Nếu tải vòi/ống làm trôi góc, kiểm tra nguồn/cơ khí và có thể đặt `true` để giữ PWM;
+  kiểm tra lại độ rung và độ ổn định khi phun.
+
+### Cách lắp dây trên Raspberry Pi 4 (header 40 chân)
+
+| Dây/chức năng | GPIO BCM | Chân vật lý trên Pi | Cách nối |
+|---|---:|---:|---|
+| Servo trái/phải: signal (cam/vàng) | 18 | 12 | Về dây tín hiệu servo pan |
+| Servo lên/xuống: signal (cam/vàng) | 19 | 35 | Về dây tín hiệu servo tilt |
+| Mass chung servo | GND | 6 | Nối hai dây nâu/đen và cực âm nguồn servo 5V |
+| Nguồn servo: hai dây đỏ | — | — | Nối cực dương nguồn 5V riêng |
+| Relay bơm: IN | 23 | 16 | Giữ cấu hình `PUMP_PIN=23` |
+| Còi hiện có | 17 | 11 | Giữ nguyên |
+| LED hiện có | 27 | 13 | Giữ nguyên |
+
+**GPIO19 là chân vật lý 35, không phải chân vật lý 19.** Bảng số chân dựa trên
+[tài liệu GPIO chính thức của Raspberry Pi](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html).
+Chọn đúng dây theo nhãn servo nếu màu thực tế khác bảng. Header dùng tín hiệu GPIO
+3.3V; dây đỏ servo dùng nguồn 5V riêng, không nối nguồn 12V vào bất kỳ dây servo nào.
+Nguồn dương 5V riêng chỉ cấp servo; nối chung GND với Pi theo bảng.
+
+Mạch công suất bơm: `+12V → COM relay → NO relay → (+) bơm`, còn `(-) bơm → (-) nguồn
+12V`. Nguồn logic VCC/GND của module relay phải theo đúng thông số module đang dùng;
+không lấy nguồn bơm 12V cấp vào VCC của relay loại 5V. Phần mass/tách nguồn logic
+thực hiện theo sơ đồ module relay thực tế.
+
+Trước khi chạy, chuyển dây tín hiệu servo lên/xuống sang chân vật lý 35. Hai GPIO
+18/19 phải dành cho ứng dụng này; không bật đồng thời SPI/I2S/PWM overlay chiếm các
+chân đó. Phần mềm vẫn dùng hai đầu ra `gpiozero` độc lập.
+
+### Bù lệch camera trong `.env`
+
+```dotenv
+NOZZLE_PAN_PIN=18
+NOZZLE_TILT_PIN=19
+NOZZLE_X_CM=21.5
+NOZZLE_Y_CM=15.5
+NOZZLE_HEIGHT_CM=29
+NOZZLE_CAMERA_OFFSET_X_CM=0
+NOZZLE_CAMERA_OFFSET_Y_CM=0
+NOZZLE_CAMERA_HEIGHT_CM=36
+NOZZLE_TARGET_HEIGHT_CM=0
+NOZZLE_DRY_RUN=true
+```
+
+Gốc ở một góc sàn: +X dọc cạnh 43 cm, +Y dọc cạnh 31 cm. Đo độ lệch trong mặt phẳng
+sàn từ vị trí đầu vòi tới tâm quang học camera (hình chiếu thẳng đứng của mỗi điểm):
+
+```text
+camera_x_cm = NOZZLE_X_CM + NOZZLE_CAMERA_OFFSET_X_CM
+camera_y_cm = NOZZLE_Y_CM + NOZZLE_CAMERA_OFFSET_Y_CM
+```
+
+Ví dụ camera lệch từ vòi **3 cm theo +X và 2 cm theo -Y** thì nhập `3` và `-2`.
+Với vòi tại (21.5,15.5), Camera X/Y trên dashboard ban đầu sẽ là (24.5,13.5).
+Hai số `0` hiện tại chỉ là giá trị tạm vì chưa đo, không phải kết quả hiệu chuẩn.
+Khoảng chênh cao 36−29=7 cm đã được tính riêng bằng hai chiều cao, không cộng vào
+offset X/Y.
+
+**Thứ tự ưu tiên:** nếu chưa có hiệu chuẩn đã lưu, phần mềm lấy các giá trị ban đầu
+từ `.env`/biến môi trường (nếu không có thì dùng mặc định `config.py`). Khi đã lưu
+dashboard, `data/nozzle_calibration.json` ưu tiên cho các số đo và tọa độ Camera X/Y.
+Vì vậy sửa `.env` rồi khởi động lại **không ghi đè hiệu chuẩn đã lưu**. Trong trường
+hợp đó, sửa trực tiếp Camera X/Y và các số đo trên dashboard rồi lưu lại; ví dụ trên
+thì nhập Camera X=24.5, Camera Y=13.5. GPIO luôn theo `.env`/`config.py`, không theo
+file hiệu chuẩn. Thay vị trí lắp camera cần chọn lại bốn góc ảnh.
+
+### Hiệu chuẩn và thử nghiệm
+
+1. Chạy `python web_server.py` (Pi: `./venv/bin/python web_server.py`). Giữ
+   **Ngắm khô — khóa bơm** bật. Chế độ này khóa cả phun tay và phun tự động.
+2. Thử Trái/Phải/Lên/Xuống/Giữa. Mọi lệnh ngắm tay đều dừng bơm và disarm.
+   Nút Lên/Xuống là bước góc servo; chiều vật lý phụ thuộc cách lắp.
+3. Mở **Hiệu chuẩn phòng và cơ cấu**, chọn đúng kiểu:
+   - `yaw_pitch`: trục đầu quay phương vị, trục sau nghiêng **qua hai phía của hướng
+     thẳng xuống**. Phần mềm gập phương vị vào ±90° và đổi dấu góc nghiêng để tới phía
+     đối diện. Với giới hạn pan hẹp có thể có vùng không tới được; phần mềm từ chối.
+   - `tilt_xy`: hai trục nghiêng vuông góc nối tiếp, trục ngoài theo X, trục trong theo Y.
+     Hai kiểu có công thức khác nhau, không chọn thay thế chỉ để vượt giới hạn góc.
+4. Đặt gốc (0,0) tại một góc sàn; +X dọc cạnh 43 cm, +Y dọc cạnh 31 cm.
+   Bấm **Chọn lại 4 góc**, rồi chọn trên ảnh theo thứ tự
+   `(0,0) → (43,0) → (43,31) → (0,31)`; nhập vị trí XY và cao độ thực của camera/vòi.
+   Chiều pan/tilt là +1 hoặc -1; hướng lắp trục là góc quay của hệ trục cơ cấu
+   so với +X sàn, tính độ trong mặt phẳng XY. Đổi góc lắp bằng trường này.
+5. Nhập cao mục tiêu: 0 cho mặt sàn, độ cao màn hình khi điện thoại nằm ngang,
+   hoặc cao bấc khi dùng nến. `Điểm ngắm trong box`: 0.5 là tâm, 1 là đáy ảnh của
+   khung; đáy ảnh không luôn là chân lửa khi nhìn từ trần. Mặc định dùng tâm.
+6. Bấm **Lưu hiệu chuẩn và disarm**, rồi **Bật click để ngắm**. Click các điểm trên
+   sàn để kiểm chứng. Tọa độ ngoài vùng ảnh đã chọn/ngoài sàn/vượt hành trình bị từ
+   chối; không tự kẹp góc rồi phun lệch. Chọn bốn góc mới chỉ có hiệu lực sau khi lưu.
+7. Điện thoại phát ảnh/video chỉ dùng cho nhận diện và ngắm khô. Bỏ điện thoại khỏi
+   vùng phun, đặt khay/điểm đánh dấu để thử nước. Tắt ngắm khô (thao tác này disarm),
+   click ngắm, chờ ổn định rồi dùng **Phun nước**. Mỗi đợt mặc định 1 giây,
+   vẫn bị chặn bởi `PUMP_MAX_SECONDS`.
+8. Đo lưới 3 × 3 tại X = 0, 21.5, 43 và Y = 0, 15.5, 31 cm nếu cơ cấu tới được;
+   có thể dùng các điểm lùi vào mép khay. Ghi sai số tâm vết nước, mục tiêu ban đầu
+   ≤3 cm. Mẫu bù nước là danh sách JSON `[{"x":10,"y":10,"dx":1,"dy":-2}]`:
+   muốn nước tới (10,10) thì cần ngắm (11,8). **dx/dy là bù điểm ngắm đã đo**, không
+   phải tự lấy dấu sai số vết nước. Phần mềm nội suy bù theo khoảng cách; thử lại sau
+   mỗi thay đổi. Mẫu bù chỉ có giá trị với cùng bơm, đầu vòi, chiều cao và áp lực.
+9. Thử tự động: bật arm. Một mục tiêu fire đạt cửa sổ xác nhận bơm sẽ được ngắm;
+   phải có ảnh chụp mới sau khi servo ổn định và còn lửa gần mục tiêu mới được phun.
+   Ngắm khô vẫn chạy chu trình này nhưng không bật relay. Không cần tắt ngắm khô
+   để thử AI với màn hình. DỪNG BƠM hủy chu trình và disarm ngay.
+
+Hiệu chuẩn lưu nguyên tử tại `data/nozzle_calibration.json`, được git bỏ qua và nạp
+lại khi khởi động. Chế độ ngắm khô theo `.env` khi khởi động; thay đổi trên web chỉ
+áp dụng phiên hiện tại. Thay vị trí/góc camera, crop, focus/zoom hoặc tỉ lệ khung hình
+thì cần hiệu chuẩn lại. Phần mềm tự chặn khi tỉ lệ khung hình khác lúc hiệu chuẩn.
+Homography giả thiết sàn phẳng; bù cao độ dùng camera XY đã đo. Mô hình hướng vòi
+giả thiết hai trục gần giao nhau và đầu vòi gần tâm quay; sai lệch cơ khí nhỏ/tia nước
+được bù bằng đo thực nghiệm, chưa có mô hình đạn đạo hay tự nhìn vết nước.
+
+API mới: `POST /api/nozzle` với `action` là `calibrate` (kèm `calibration`),
+`dry_run` (kèm boolean `enabled`), hoặc `aim` (kèm `u,v` chuẩn hóa 0..1 hay `x,y` cm).
+`GET /api/status` thêm `nozzle`, `frame_size` và `servo.pan`/`servo.tilt`; giữ trường
+`servo.angle` cho client cũ. `/api/servo` thêm `up`/`down`; client mobile cũ vẫn điều
+khiển pan và nhận trạng thái, phần hiệu chuẩn hai trục dùng dashboard web.
+
+### Kiểm thử tự động
+
+`python -m pytest -q` kiểm tra hình học, phối cảnh/cao độ, giới hạn vùng phun,
+xác nhận cùng mục tiêu, kết quả AI chụp trước khi ổn định, ngắm khô, cooldown,
+API và watchdog. Laptop giả lập GPIO; cần kiểm thử trên Pi và phun thực tế để
+đánh giá nguồn, khả năng giữ góc, sai số tia nước và nhận diện nến thật.
+`node tests/test_nozzle_ui.cjs` kiểm tra tọa độ click khi ảnh có viền trống và thao tác
+dừng/disarm trước khi chọn góc hiệu chuẩn, không cần cài thêm thư viện Node.
 
 ## An toàn vận hành
 

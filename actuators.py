@@ -9,6 +9,7 @@ Trên laptop, hai lớp này chỉ ghi log để test logic mà không cần ph�
 """
 
 import os
+import math
 import threading
 import time
 import types
@@ -122,16 +123,20 @@ def _patch_lgpio_pwm_pin(servo_device):
 class CameraServo:
     """Servo pan gắn webcam. Chỉ nối signal về Pi; servo dùng nguồn 5V riêng."""
 
-    def __init__(self):
+    def __init__(self, pin=None, min_angle=None, max_angle=None, center_angle=None,
+                 hold_position=None, kernel_pwm=True):
         self.platform = config.PLATFORM
-        self.min_angle = float(getattr(config, "SERVO_MIN_ANGLE", 30.0))
-        self.max_angle = float(getattr(config, "SERVO_MAX_ANGLE", 150.0))
-        self.center_angle = float(getattr(config, "SERVO_CENTER_ANGLE", 90.0))
+        self.pin = int(config.SERVO_PIN if pin is None else pin)
+        self.min_angle = float(config.SERVO_MIN_ANGLE if min_angle is None else min_angle)
+        self.max_angle = float(config.SERVO_MAX_ANGLE if max_angle is None else max_angle)
+        self.center_angle = float(config.SERVO_CENTER_ANGLE if center_angle is None else center_angle)
+        if not 0 <= self.min_angle <= self.center_angle <= self.max_angle <= 180:
+            raise ValueError("Giới hạn/zero servo không hợp lệ")
         self.step_angle = float(getattr(config, "SERVO_STEP_ANGLE", 10.0))
         self.settle_seconds = max(
             0.0, float(getattr(config, "SERVO_SETTLE_SECONDS", 0.6))
         )
-        self.hold_position = bool(getattr(config, "SERVO_HOLD_POSITION", True))
+        self.hold_position = bool(getattr(config, "SERVO_HOLD_POSITION", True) if hold_position is None else hold_position)
         self._lock = threading.Lock()
         self._angle = self._clamp(self.center_angle)
         self._servo = None
@@ -141,7 +146,7 @@ class CameraServo:
         if self.platform == "pi":
             min_pw = float(getattr(config, "SERVO_MIN_PULSE_WIDTH", 0.0005))
             max_pw = float(getattr(config, "SERVO_MAX_PULSE_WIDTH", 0.0024))
-            if os.path.isdir("/sys/class/pwm/pwmchip0") and int(config.SERVO_PIN) in (
+            if kernel_pwm and os.path.isdir("/sys/class/pwm/pwmchip0") and self.pin in (
                 12,
                 13,
                 18,
@@ -149,7 +154,7 @@ class CameraServo:
             ):
                 try:
                     self._servo = _SysfsPWMServo(
-                        config.SERVO_PIN,
+                        self.pin,
                         min_pulse_width=min_pw,
                         max_pulse_width=max_pw,
                     )
@@ -161,7 +166,7 @@ class CameraServo:
                 from gpiozero import AngularServo  # type: ignore[import-not-found]
 
                 self._servo = AngularServo(
-                    config.SERVO_PIN,
+                    self.pin,
                     initial_angle=self._angle,
                     min_angle=0.0,
                     max_angle=180.0,
@@ -174,14 +179,17 @@ class CameraServo:
             with self._lock:
                 self._schedule_detach_locked()
             print(
-                f"[Servo] SG90 trên GPIO BCM {config.SERVO_PIN} ({pwm_mode}), "
+                f"[Servo] SG90 trên GPIO BCM {self.pin} ({pwm_mode}), "
                 f"góc {self.min_angle:.0f}-{self.max_angle:.0f}."
             )
         else:
             print("[Servo] Chế độ laptop - giả lập servo qua console.")
 
     def _clamp(self, angle):
-        return max(self.min_angle, min(self.max_angle, float(angle)))
+        value = float(angle)
+        if not math.isfinite(value):
+            raise ValueError("Góc servo phải hữu hạn")
+        return max(self.min_angle, min(self.max_angle, value))
 
     def _schedule_detach_locked(self):
         if self._detach_timer is not None:
@@ -264,6 +272,70 @@ class CameraServo:
                 except Exception:
                     pass
                 self._servo = None
+
+
+class NozzleServo:
+    """Two independent SG90 outputs; never share the legacy sysfs channel 0."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.pan = self.tilt = None
+        pins = (config.NOZZLE_PAN_PIN, config.NOZZLE_TILT_PIN)
+        if config.PLATFORM == "pi":
+            reserved = {config.PUMP_PIN, config.LED_PIN, config.BUZZER_PIN, 0, 1, 2, 3}
+            if len(set(pins)) != 2 or any(p < 4 or p > 27 or p in reserved for p in pins):
+                raise ValueError("Cấu hình NOZZLE_PAN_PIN/NOZZLE_TILT_PIN: hai GPIO BCM riêng, không trùng bơm/LED/còi/I2C")
+        try:
+            for axis in ("pan", "tilt"):
+                prefix = "NOZZLE_" + axis.upper()
+                setattr(self, axis, CameraServo(
+                    pin=getattr(config, prefix + "_PIN"),
+                    min_angle=getattr(config, prefix + "_MIN"),
+                    max_angle=getattr(config, prefix + "_MAX"),
+                    center_angle=getattr(config, prefix + "_ZERO"),
+                    hold_position=config.NOZZLE_HOLD_POSITION,
+                    kernel_pwm=False,
+                ))
+            # Initial PWM also moves the mechanism towards its configured zero.
+            for axis in (self.pan, self.tilt):
+                axis._moving_until = time.monotonic() + axis.settle_seconds
+        except Exception:
+            self.cleanup()
+            raise
+
+    def move(self, pan, tilt):
+        with self._lock:
+            for axis, angle in ((self.pan, pan), (self.tilt, tilt)):
+                if not math.isfinite(angle) or not axis.min_angle <= angle <= axis.max_angle:
+                    raise ValueError("Mục tiêu vượt giới hạn góc vòi")
+            if self.pan.set_angle(pan) is None or self.tilt.set_angle(tilt) is None:
+                raise ValueError("Lỗi xuất tín hiệu servo; không cho phép phun")
+        return pan
+
+    def step(self, direction, axis="pan"):
+        with self._lock:
+            selected = self.tilt if axis == "tilt" else self.pan
+            value = selected.get_angle() + direction * selected.step_angle
+            return self.move(self.pan._clamp(value) if axis == "pan" else self.pan.get_angle(),
+                             self.tilt._clamp(value) if axis == "tilt" else self.tilt.get_angle())
+
+    def center(self):
+        return self.move(self.pan.center_angle, self.tilt.center_angle)
+
+    def set_angle(self, angle):
+        return self.move(float(angle), self.tilt.get_angle())
+
+    def is_moving(self):
+        return self.pan.is_moving() or self.tilt.is_moving()
+
+    def get_state(self):
+        return dict(self.pan.get_state(), pan=self.pan.get_state(), tilt=self.tilt.get_state(),
+                    moving=self.is_moving())
+
+    def cleanup(self):
+        for axis in (self.pan, self.tilt):
+            if axis is not None:
+                axis.cleanup()
 
 
 class WaterPump:

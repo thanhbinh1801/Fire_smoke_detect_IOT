@@ -69,6 +69,13 @@
       font-size: 12px;
       color: var(--soft);
     }
+    .topbar-status {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .dot {
       width: 8px;
       height: 8px;
@@ -308,9 +315,12 @@
         <div class="brand-icon" aria-hidden="true">🔥</div>
         <span>Hệ thống Giám sát Lửa &amp; Khói IoT</span>
       </div>
-      <div class="connection">
-        <span class="dot" id="connection-dot"></span>
-        <span id="connection-label">Đang kết nối...</span>
+      <div class="topbar-status">
+        <div class="connection" id="actuator-mode">Đang xác định chế độ GPIO...</div>
+        <div class="connection">
+          <span class="dot" id="connection-dot"></span>
+          <span id="connection-label">Đang kết nối...</span>
+        </div>
       </div>
     </header>
 
@@ -372,7 +382,7 @@
           </div>
           <div class="panel-body">
             <div class="control-group-label">
-              <span>Góc quay Camera (Servo)</span>
+              <span>Vòi nước hai trục (webcam cố định)</span>
               <span class="chip" id="servo-angle">--°</span>
             </div>
             <div class="btn-grid-3">
@@ -380,6 +390,33 @@
               <button class="btn" data-servo="center">Giữa</button>
               <button class="btn" data-servo="right">Phải →</button>
             </div>
+            <div class="btn-grid-2" style="margin-top:8px">
+              <button class="btn" data-servo="up">↑ Lên</button>
+              <button class="btn" data-servo="down">↓ Xuống</button>
+            </div>
+            <p class="status-note" id="nozzle-status">Đang nạp thông tin vòi…</p>
+            <label><input type="checkbox" id="nozzle-dry" checked> Ngắm khô — khóa bơm</label>
+            <div class="btn-grid-2" style="margin-top:8px">
+              <button class="btn" id="nozzle-corners">Chọn lại 4 góc</button>
+              <button class="btn" id="nozzle-click">Bật click để ngắm</button>
+            </div>
+            <p class="status-note" id="nozzle-help">Chọn góc sàn theo thứ tự: (0,0) → (43,0) → (43,31) → (0,31). Lệnh ngắm tay sẽ disarm.</p>
+            <details style="margin-top:12px">
+              <summary>Hiệu chuẩn phòng và cơ cấu</summary>
+              <div id="nozzle-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px"></div>
+              <label style="display:block;margin-top:10px">Kiểu cơ cấu
+                <select id="nozzle-mechanism" style="width:100%">
+                  <option value="yaw_pitch">Quay phương vị + nghiêng qua hướng thẳng xuống</option>
+                  <option value="tilt_xy">Hai trục nghiêng vuông góc</option>
+                </select>
+              </label>
+              <p class="status-note">Zero, giới hạn góc và GPIO chỉnh trong .env; chiều quay ±1 chỉnh bên dưới. Chỉ dùng kiểu cơ cấu đúng với cách lắp thực tế.</p>
+              <label>Mẫu bù nước (cm, JSON)
+                <textarea id="nozzle-samples" rows="4" style="width:100%;box-sizing:border-box">[]</textarea>
+              </label>
+              <p class="status-note">Mỗi mẫu: {"x":10,"y":10,"dx":1,"dy":-2}. dx/dy là độ lệch điểm cần ngắm để nước tới đúng (x,y), xác định bằng thử thực tế.</p>
+              <button class="btn full" id="nozzle-save">Lưu hiệu chuẩn và disarm</button>
+            </details>
 
             <div class="divider"></div>
 
@@ -475,6 +512,7 @@
       }
 
       const active = data.status === "running";
+      setText($("actuator-mode"), data.actuator_mode_label || "Chưa xác định chế độ GPIO");
       setText($("connection-label"), active ? "Trực tuyến" : data.status === "error" ? "Lỗi kết nối" : "Đang khởi động");
       $("connection-dot").className = `dot${active ? " live" : data.status === "error" ? " offline" : ""}`;
       $("live-label").hidden = !active;
@@ -602,5 +640,6 @@
     refresh();
     setInterval(refresh, 1000);
   </script>
+  <script src="{{ url_for('static', filename='nozzle.js') }}"></script>
 </body>
 </html>

@@ -42,6 +42,7 @@ def test_camera_servo_auto_detaches_on_pi(monkeypatch):
     Device.pin_factory = MockFactory(pin_class=MockPWMPin)
     monkeypatch.setattr(config, "PLATFORM", "pi")
     monkeypatch.setattr(config, "SERVO_SETTLE_SECONDS", 0.15)
+    monkeypatch.setattr(config, "SERVO_HOLD_POSITION", False)
 
     servo = CameraServo()
     try:

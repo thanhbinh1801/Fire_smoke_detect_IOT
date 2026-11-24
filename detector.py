@@ -423,6 +423,7 @@ class AsyncFireDetector:
 
                 with self._result_cond:
                     self.latest_detections = dets
+                    self.result_frame_timestamp = frame_ts
                     self.last_inference_ms = infer_ms
                     self.ai_fps = current_ai_fps
                     self.last_update_time = result_wall_time
@@ -452,15 +453,18 @@ class AsyncFireDetector:
         with self.lock:
             return list(self.latest_detections), self.ai_fps
 
-    def get_result(self):
+    def get_result(self, include_frame_time=False):
         """Lấy kết quả, FPS, thời điểm suy luận gần nhất và lỗi nếu có."""
         with self.lock:
-            return (
+            result = (
                 list(self.latest_detections),
                 self.ai_fps,
                 self.last_update_time,
                 self.last_error,
             )
+            if include_frame_time:
+                return result + (getattr(self, "result_frame_timestamp", 0.0),)
+            return result
 
     def stop(self):
         """Dừng luồng AI an toàn."""

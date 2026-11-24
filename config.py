@@ -6,6 +6,7 @@ hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 """
 
 import os
+import platform as host_platform
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE_PATH = os.path.join(_BASE_DIR, ".env")
@@ -101,6 +102,33 @@ def _env_bool(key: str, default: bool) -> bool:
     return bool(default)
 
 
+def _detect_platform() -> str:
+    """Detect Raspberry Pi from its device-tree model; use laptop otherwise."""
+    try:
+        with open("/proc/device-tree/model", "rb") as model_file:
+            model_bytes = model_file.read().replace(b"\x00", b"")
+        model = model_bytes.decode("utf-8", errors="ignore")
+        if "raspberry pi" in model.lower():
+            return "pi"
+    except OSError:
+        pass
+
+    if host_platform.system() == "Linux" and host_platform.machine().lower() in {
+        "aarch64", "armv7l", "armv6l"
+    }:
+        return "pi"
+    return "laptop"
+
+
+def _resolve_platform(value: str) -> str:
+    normalized = str(value or "auto").strip().lower()
+    if normalized in ("", "auto"):
+        return _detect_platform()
+    if normalized in ("pi", "laptop"):
+        return normalized
+    return _detect_platform()
+
+
 # ==============================================================================
 # 1. MODEL AI & SUY LUẬN (ONNX RUNTIME + ROI ZOOM 2 GIAI ĐOẠN)
 # ==============================================================================
@@ -139,7 +167,7 @@ PREPROCESS_ROI = _env_str("PREPROCESS_ROI", "")
 FRAME_WIDTH = _env_int("FRAME_WIDTH", 640)
 FRAME_HEIGHT = _env_int("FRAME_HEIGHT", 480)
 
-PLATFORM = _env_str("PLATFORM", "laptop").lower()
+PLATFORM = _resolve_platform(_env_str("PLATFORM", "auto"))
 CAMERA_SOURCE = _env_str("CAMERA_SOURCE", "usb").lower()
 WEBCAM_INDEX = _env_int("WEBCAM_INDEX", 0)
 WEBCAM_FOURCC = _env_str("WEBCAM_FOURCC", "MJPG").upper()
@@ -198,6 +226,7 @@ WEB_HOST = _env_str("WEB_HOST", "0.0.0.0")
 WEB_PORT = _env_int("WEB_PORT", 5000)
 WEB_STREAM_FPS = _env_int("WEB_STREAM_FPS", 12)
 WEB_JPEG_QUALITY = _env_int("WEB_JPEG_QUALITY", 80)
+CORS_ALLOWED_ORIGINS = _env_str("CORS_ALLOWED_ORIGINS", "")
 
 # ==============================================================================
 # 7. CƠ CẤU CHẤP HÀNH: SERVO & BƠM NƯỚC (ACTUATORS)
@@ -211,6 +240,29 @@ SERVO_MIN_PULSE_WIDTH = _env_float("SERVO_MIN_PULSE_WIDTH", 0.0005)
 SERVO_MAX_PULSE_WIDTH = _env_float("SERVO_MAX_PULSE_WIDTH", 0.0024)
 SERVO_SETTLE_SECONDS = _env_float("SERVO_SETTLE_SECONDS", 0.8)
 SERVO_HOLD_POSITION = _env_bool("SERVO_HOLD_POSITION", True)
+
+# Fixed webcam + two-axis nozzle. BCM18 = header pin12; BCM19 = header pin35.
+NOZZLE_PAN_PIN = _env_int("NOZZLE_PAN_PIN", SERVO_PIN)
+NOZZLE_TILT_PIN = _env_int("NOZZLE_TILT_PIN", 19)
+NOZZLE_X_CM = _env_float("NOZZLE_X_CM", 21.5)
+NOZZLE_Y_CM = _env_float("NOZZLE_Y_CM", 15.5)
+NOZZLE_HEIGHT_CM = _env_float("NOZZLE_HEIGHT_CM", 29.0)
+NOZZLE_CAMERA_OFFSET_X_CM = _env_float("NOZZLE_CAMERA_OFFSET_X_CM", 0.0)
+NOZZLE_CAMERA_OFFSET_Y_CM = _env_float("NOZZLE_CAMERA_OFFSET_Y_CM", 0.0)
+NOZZLE_CAMERA_HEIGHT_CM = _env_float("NOZZLE_CAMERA_HEIGHT_CM", 36.0)
+NOZZLE_TARGET_HEIGHT_CM = _env_float("NOZZLE_TARGET_HEIGHT_CM", 0.0)
+NOZZLE_PAN_MIN = _env_float("NOZZLE_PAN_MIN", 30.0)
+NOZZLE_PAN_MAX = _env_float("NOZZLE_PAN_MAX", 150.0)
+NOZZLE_PAN_ZERO = _env_float("NOZZLE_PAN_ZERO", 90.0)
+NOZZLE_TILT_MIN = _env_float("NOZZLE_TILT_MIN", 30.0)
+NOZZLE_TILT_MAX = _env_float("NOZZLE_TILT_MAX", 150.0)
+NOZZLE_TILT_ZERO = _env_float("NOZZLE_TILT_ZERO", 90.0)
+NOZZLE_HOLD_POSITION = _env_bool("NOZZLE_HOLD_POSITION", False)
+NOZZLE_CALIBRATION_PATH = _env_str("NOZZLE_CALIBRATION_PATH", "data/nozzle_calibration.json")
+NOZZLE_DRY_RUN = _env_bool("NOZZLE_DRY_RUN", True)
+NOZZLE_BURST_SECONDS = _env_float("NOZZLE_BURST_SECONDS", 1.0)
+NOZZLE_TARGET_TOLERANCE_CM = _env_float("NOZZLE_TARGET_TOLERANCE_CM", 3.0)
+NOZZLE_RESULT_MAX_AGE = _env_float("NOZZLE_RESULT_MAX_AGE", 1.0)
 
 PUMP_PIN = _env_int("PUMP_PIN", 23)
 PUMP_ACTIVE_HIGH = _env_bool("PUMP_ACTIVE_HIGH", True)
