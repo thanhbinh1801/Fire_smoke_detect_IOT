@@ -400,7 +400,7 @@
               <button class="btn" id="nozzle-corners">Chọn lại 4 góc</button>
               <button class="btn" id="nozzle-click">Bật click để ngắm</button>
             </div>
-            <p class="status-note" id="nozzle-help">Chọn góc sàn theo thứ tự: (0,0) → (43,0) → (43,31) → (0,31). Lệnh ngắm tay sẽ disarm.</p>
+            <p class="status-note" id="nozzle-help">Chọn góc sàn theo thứ tự: gốc (0,0) → đầu cạnh X → góc đối diện → đầu cạnh Y. Kích thước lấy từ số đo trong phần hiệu chuẩn. Lệnh ngắm tay sẽ disarm.</p>
             <details style="margin-top:12px">
               <summary>Hiệu chuẩn phòng và cơ cấu</summary>
               <div id="nozzle-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px"></div>
@@ -415,7 +415,9 @@
                 <textarea id="nozzle-samples" rows="4" style="width:100%;box-sizing:border-box">[]</textarea>
               </label>
               <p class="status-note">Mỗi mẫu: {"x":10,"y":10,"dx":1,"dy":-2}. dx/dy là độ lệch điểm cần ngắm để nước tới đúng (x,y), xác định bằng thử thực tế.</p>
-              <button class="btn full" id="nozzle-save">Lưu hiệu chuẩn và disarm</button>
+              <button class="btn full" id="nozzle-settings-save">Lưu thông số và áp dụng</button>
+              <p class="status-note">Thông số được lưu cho lần chạy sau. Click ngắm cần chọn đủ bốn góc rồi lưu hiệu chuẩn bên dưới. Cả hai nút lưu đều dừng bơm và disarm.</p>
+              <button class="btn full" id="nozzle-save">Lưu 4 góc và hiệu chuẩn</button>
             </details>
 
             <div class="divider"></div>
@@ -553,7 +555,7 @@
       }
     }
 
-    async function postJson(url, body, button) {
+    async function postJson(url, body, button, onError) {
       if (button) button.disabled = true;
       try {
         const res = await fetch(url, {
@@ -567,6 +569,7 @@
         return result;
       } catch (err) {
         setText($("error"), err.message);
+        if (onError) onError(err.message);
         return null;
       } finally {
         if (button) button.disabled = false;
@@ -640,6 +643,6 @@
     refresh();
     setInterval(refresh, 1000);
   </script>
-  <script src="{{ url_for('static', filename='nozzle.js') }}"></script>
+  <script src="{{ url_for('static', filename='nozzle.js', v=2) }}"></script>
 </body>
 </html>

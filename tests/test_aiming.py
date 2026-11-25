@@ -115,6 +115,38 @@ def test_save_load_and_invalid_save_is_atomic(rig):
     assert NozzleController(c.path).calibration.ready
 
 
+def test_room_settings_can_be_saved_before_image_corners(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PLATFORM", "laptop")
+    monkeypatch.setattr(config, "NOZZLE_CALIBRATION_PATH", str(tmp_path / "room.json"))
+    monkeypatch.setattr(web_server.FireMonitor, "start", lambda self: None)
+    monitor = web_server.FireMonitor()
+    client = web_server.create_app(monitor).test_client()
+    response = client.post("/api/nozzle", json={"action": "configure", "calibration": {
+        "length_cm": 30, "width_cm": 11, "camera_height_cm": 36}})
+    assert response.status_code == 200, response.get_json()
+    reloaded = NozzleController(monitor._nozzle.path)
+    assert reloaded.calibration.values["length_cm"] == 30
+    assert reloaded.calibration.values["width_cm"] == 11
+    assert reloaded.calibration.values["camera_height_cm"] == 36
+    assert not reloaded.calibration.ready
+    with pytest.raises(ValueError, match="Chưa hiệu chuẩn"):
+        reloaded.calibration.image_to_floor(.5, .5)
+
+
+def test_room_settings_update_saved_geometry_without_replacing_corners(rig, monkeypatch):
+    c, servo, pump, _ = rig
+    monkeypatch.setattr(web_server.FireMonitor, "start", lambda self: None)
+    monitor = web_server.FireMonitor()
+    monitor._nozzle, monitor._servo, monitor._pump = c, servo, pump
+    client = web_server.create_app(monitor).test_client()
+    response = client.post("/api/nozzle", json={"action": "configure", "calibration": {
+        "length_cm": 30, "width_cm": 11, "corners": []}})
+    assert response.status_code == 200, response.get_json()
+    assert not pump.is_armed()
+    assert c.calibration.image_to_floor(.5, .5) == pytest.approx((15, 5.5))
+    assert NozzleController(c.path).calibration.ready
+
+
 def test_dry_cycle_never_sprays_or_repeats_motion(rig):
     c, servo, pump, clock = rig
     tick(rig); tick(rig)

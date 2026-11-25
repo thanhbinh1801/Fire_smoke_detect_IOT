@@ -24,7 +24,13 @@ const context = {
 };
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../static/nozzle.js'), 'utf8'), context);
-context.updateActuators({frame_size:[640,480], nozzle:{dry_run:true,calibration:{corners:[],water_samples:[]}}});
+const calibration = {
+  length_cm:43, width_cm:31, nozzle_x_cm:21.5, nozzle_y_cm:15.5,
+  nozzle_height_cm:29, camera_height_cm:36, camera_x_cm:21.5, camera_y_cm:15.5,
+  target_height_cm:0, rotation_deg:0, pan_sign:1, tilt_sign:1, anchor_y:.5,
+  mechanism:'yaw_pitch', image_aspect:4/3, corners:[], water_samples:[]
+};
+context.updateActuators({frame_size:[640,480], nozzle:{dry_run:true,calibration}});
 
 (async () => {
   await get('nozzle-click').fire('click');
@@ -38,5 +44,30 @@ context.updateActuators({frame_size:[640,480], nozzle:{dry_run:true,calibration:
   await get('nozzle-corners').fire('click');
   assert.equal(requests[1].url, '/api/pump');
   assert.equal(requests[1].body.action, 'stop', 'calibration starts by stopping/disarming');
-  console.log('Nozzle UI: click coordinates and calibration stop passed');
+  await get('nozzle-save').fire('click');
+  assert.equal(requests.length, 2, 'incomplete image calibration must not be submitted');
+  assert.match(get('nozzle-help').textContent, /0\/4/);
+
+  get('nc-length_cm').value = 30;
+  get('nc-width_cm').value = 11;
+  await get('nozzle-settings-save').fire('click');
+  assert.equal(requests[2].body.action, 'configure');
+  assert.equal(requests[2].body.calibration.length_cm, 30);
+  assert.equal(requests[2].body.calibration.width_cm, 11);
+  assert.equal(requests[2].body.calibration.corners.length, 0);
+
+  // A later status poll must not overwrite a measurement while it is being edited.
+  get('nc-width_cm').value = 10;
+  context.updateActuators({nozzle:{dry_run:true,calibration}});
+  assert.equal(get('nc-width_cm').value, 10);
+
+  context.postJson = async (url, body, button, onError) => {
+    onError('Không ghi được file hiệu chuẩn');
+    return null;
+  };
+  await get('nozzle-settings-save').fire('click');
+  assert.equal(get('nozzle-help').textContent, 'Không ghi được file hiệu chuẩn');
+  context.updateActuators({nozzle:{dry_run:true,calibration}});
+  assert.equal(get('nozzle-help').textContent, 'Không ghi được file hiệu chuẩn');
+  console.log('Nozzle UI: coordinates, incomplete corners, settings save and persistent errors passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -556,6 +556,9 @@ export default function App() {
                   Tinh chỉnh Ngưỡng AI (Thời gian thực)
                 </Text>
               </View>
+              <Text style={[styles.settingDesc, { paddingHorizontal: 16, paddingBottom: 12 }]}>
+                Thiết lập thử nghiệm chỉ có hiệu lực trong phiên chạy hiện tại và mất khi khởi động lại. Các giới hạn an toàn bơm/servo không bị thay đổi.
+              </Text>
               <View style={styles.cardBody}>
                 <View style={styles.settingRow}>
                   <View style={{ flex: 1 }}>

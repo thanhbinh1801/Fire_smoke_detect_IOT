@@ -518,11 +518,18 @@ class FireMonitor:
             servo, pump = self._servo, self._pump
             action = payload.get("action")
             try:
-                if action == "calibrate":
+                if action in ("calibrate", "configure"):
                     if pump is not None:
                         pump.arm(False)
                         pump.stop()
-                    self._nozzle.save(payload.get("calibration"))
+                    values = payload.get("calibration")
+                    if action == "configure":
+                        if not isinstance(values, dict):
+                            raise ValueError("Thông số phải là một đối tượng JSON")
+                        # Saving measurements never replaces the selected image region.
+                        values = {**self._nozzle.calibration.values, **values,
+                                  "corners": self._nozzle.calibration.values["corners"]}
+                    self._nozzle.save(values, require_corners=action == "calibrate")
                 elif action == "dry_run":
                     if not isinstance(payload.get("enabled"), bool):
                         raise ValueError("enabled phải là boolean")

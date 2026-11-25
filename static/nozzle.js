@@ -22,7 +22,7 @@
   }
   const help = text => { el('nozzle-help').textContent = text; };
   async function send(body) {
-    const result = await postJson('/api/nozzle', body);
+    const result = await postJson('/api/nozzle', body, undefined, help);
     if (result) { help(result.message); refresh(); }
     return result;
   }
@@ -79,10 +79,16 @@
       await send({action:'aim',u,v});
     }
   });
-  el('nozzle-save').addEventListener('click', async () => {
+  async function save(settingsOnly) {
     try {
-      if (!calibration || !frameSize) throw new Error('Chưa có camera/thông tin hiệu chuẩn.');
-      const next = {...calibration, corners, image_aspect:frameSize[0]/frameSize[1]};
+      if (!calibration) throw new Error('Chưa nạp được thông số từ máy chủ.');
+      const next = {...calibration};
+      if (!settingsOnly) {
+        if (!frameSize) throw new Error('Chưa có khung hình camera.');
+        if (corners.length !== 4) throw new Error(`Đã chọn ${corners.length}/4 góc. Chọn đủ bốn góc, hoặc bấm Lưu thông số và áp dụng để lưu số đo trước.`);
+        next.corners = corners;
+        next.image_aspect = frameSize[0]/frameSize[1];
+      }
       for (const key of Object.keys(fields)) {
         const raw = el(`nc-${key}`).value;
         if (raw === '' || !Number.isFinite(Number(raw))) throw new Error('Điền đầy đủ các thông số dạng số.');
@@ -90,7 +96,9 @@
       }
       next.mechanism = el('nozzle-mechanism').value;
       next.water_samples = JSON.parse(el('nozzle-samples').value);
-      if (await send({action:'calibrate',calibration:next})) calibration = next;
+      if (await send({action:settingsOnly ? 'configure' : 'calibrate',calibration:next})) calibration = next;
     } catch (error) { help(error.message); }
-  });
+  }
+  el('nozzle-settings-save').addEventListener('click', () => save(true));
+  el('nozzle-save').addEventListener('click', () => save(false));
 })();

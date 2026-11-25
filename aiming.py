@@ -170,9 +170,9 @@ class NozzleController:
         except (ValueError, TypeError, OSError) as error:
             self.message = f"Không nạp được hiệu chuẩn: {error}"
 
-    def save(self, values):
+    def save(self, values, *, require_corners=True):
         candidate = FloorCalibration(values)
-        if not candidate.ready:
+        if require_corners and not candidate.ready:
             raise ValueError("Cần chọn bốn góc trước khi lưu")
         path = os.path.abspath(self.path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -185,7 +185,8 @@ class NozzleController:
             if os.path.exists(temp):
                 os.unlink(temp)
         self.calibration = candidate
-        self.cancel("Đã lưu hiệu chuẩn")
+        self.cancel("Đã lưu hiệu chuẩn" if candidate.ready else
+                    "Đã lưu thông số; cần chọn và lưu bốn góc để click ngắm")
 
     def cancel(self, message="Đã hủy chu trình tự động"):
         self.target = None

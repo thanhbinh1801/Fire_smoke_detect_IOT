@@ -230,6 +230,13 @@ file hiệu chuẩn. Thay vị trí lắp camera cần chọn lại bốn góc �
 
 ### Hiệu chuẩn và thử nghiệm
 
+Các số đo có thể lưu riêng bằng **Lưu thông số và áp dụng**, kể cả khi chưa chọn
+bốn góc ảnh. Thao tác này dừng bơm, disarm, ghi file và áp dụng ngay vào bộ ngắm;
+nếu đã có bốn góc được lưu thì giữ lại các góc đó. Chọn lại bốn góc rồi bấm
+**Lưu 4 góc và hiệu chuẩn** để thay vùng ảnh. Khi chưa có bốn góc đã lưu,
+click ngắm và ngắm tự động vẫn bị chặn. Thông báo lỗi lưu nằm ngay dưới vùng
+điều khiển vòi và giữ nguyên qua các lần cập nhật trạng thái.
+
 1. Chạy `python web_server.py` (Pi: `./venv/bin/python web_server.py`). Giữ
    **Ngắm khô — khóa bơm** bật. Chế độ này khóa cả phun tay và phun tự động.
 2. Thử Trái/Phải/Lên/Xuống/Giữa. Mọi lệnh ngắm tay đều dừng bơm và disarm.
