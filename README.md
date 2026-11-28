@@ -91,9 +91,9 @@ Các thiết lập chính (giá trị trong `.env` được ưu tiên):
 
 - `PLATFORM = "pi"`, `CAMERA_SOURCE = "usb"`: Pi dùng webcam USB.
 - `WEBCAM_INDEX = 0`: đổi nếu webcam không phải `/dev/video0`.
-- `CONFIDENCE_THRESHOLD = 0.40`: ngưỡng hiển thị/cảnh báo chung.
+- `CONFIDENCE_THRESHOLD = 0.35`: ngưỡng nhận diện lửa; báo lửa xác nhận tối thiểu 3 kết quả AI mới.
 - `FIRE_CONFIRM_WINDOW_SECONDS = 1.5`, `FIRE_CONFIRM_MIN_RATIO = 0.6`, `FIRE_CONFIRM_MIN_SAMPLES = 4`: xác nhận lửa theo cửa sổ thời gian cho còi/LED.
-- `PUMP_CONFIDENCE_THRESHOLD = 0.60`: ngưỡng riêng để phun nước (cao hơn để giảm báo động giả).
+- `PUMP_CONFIDENCE_THRESHOLD = 0.35`, `PUMP_CONFIRM_MIN_SAMPLES = 3`: cùng ngưỡng và số mẫu với báo lửa. Sau khi ngắm vẫn chờ servo ổn định và ảnh mới trước khi phun.
 - `PUMP_CONFIRM_WINDOW_SECONDS = 3.0`, `PUMP_CONFIRM_MIN_RATIO = 0.7`, `PUMP_CONFIRM_MIN_SAMPLES = 8`: cửa sổ xác nhận trước khi phun tự động.
 - `PUMP_MAX_SECONDS = 5.0`, `PUMP_COOLDOWN = 15.0`, `PUMP_MAX_PER_MINUTE = 4`: giới hạn an toàn của bơm.
 - `NOZZLE_PAN_PIN = 18`, `NOZZLE_TILT_PIN = 19`: tín hiệu servo trái/phải và lên/xuống của vòi (số BCM).

@@ -41,15 +41,21 @@ def test_duplicate_result_time_ignored():
     assert not confirmer.update(fire, now=0.10, result_time=10.0)
 
 
-def test_pump_confirmer_stricter_than_alarm_confirmer():
+def test_alarm_and_pump_confirm_on_third_distinct_result(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "FIRE_CONFIDENCE_THRESHOLD", 0.35)
+    monkeypatch.setattr(config, "PUMP_CONFIDENCE_THRESHOLD", 0.35)
+    monkeypatch.setattr(config, "FIRE_CONFIRM_MIN_SAMPLES", 3)
+    monkeypatch.setattr(config, "PUMP_CONFIRM_MIN_SAMPLES", 3)
     alarm = build_alarm_confirmer()
     pump = build_pump_confirmer()
-    medium_fire = [{"label": "fire", "conf": 0.50, "box": (0, 0, 20, 20)}]
-
-    for idx in range(10):
-        t = idx * 0.25
-        alarm.update(medium_fire, now=t, result_time=t + 1.0)
-        pump.update(medium_fire, now=t, result_time=t + 1.0)
-
-    assert alarm.is_confirmed
-    assert not pump.is_confirmed
+    fire = [{"label": "fire", "conf": 0.35, "box": (0, 0, 20, 20)}]
+    for confirmer in (alarm, pump):
+        assert not confirmer.update(fire, now=0, result_time=1)
+        assert not confirmer.update(fire, now=.1, result_time=1)
+        assert not confirmer.update(fire, now=.2, result_time=2)
+        assert confirmer.update(fire, now=.3, result_time=3)
+        confirmer.reset()
+        for idx in range(3):
+            assert not confirmer.update([dict(fire[0], conf=.349)],
+                                        now=idx*.1, result_time=idx+1)

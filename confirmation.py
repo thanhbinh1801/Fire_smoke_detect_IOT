@@ -90,12 +90,12 @@ def build_alarm_confirmer():
     fire_threshold = getattr(
         config,
         "FIRE_CONFIDENCE_THRESHOLD",
-        getattr(config, "CONFIDENCE_THRESHOLD", 0.40),
+        getattr(config, "CONFIDENCE_THRESHOLD", 0.35),
     )
     return FireConfirmer(
         window_s=getattr(config, "FIRE_CONFIRM_WINDOW_SECONDS", 1.5),
         min_ratio=getattr(config, "FIRE_CONFIRM_MIN_RATIO", 0.6),
-        min_samples=getattr(config, "FIRE_CONFIRM_MIN_SAMPLES", 4),
+        min_samples=getattr(config, "FIRE_CONFIRM_MIN_SAMPLES", 3),
         threshold=fire_threshold,
         hold_s=getattr(config, "HOLD_FIRE_TIME", 1.5),
         label="fire",
@@ -129,8 +129,8 @@ def build_pump_confirmer():
     return FireConfirmer(
         window_s=getattr(config, "PUMP_CONFIRM_WINDOW_SECONDS", 3.0),
         min_ratio=getattr(config, "PUMP_CONFIRM_MIN_RATIO", 0.7),
-        min_samples=getattr(config, "PUMP_CONFIRM_MIN_SAMPLES", 8),
-        threshold=getattr(config, "PUMP_CONFIDENCE_THRESHOLD", 0.60),
+        min_samples=getattr(config, "PUMP_CONFIRM_MIN_SAMPLES", 3),
+        threshold=getattr(config, "PUMP_CONFIDENCE_THRESHOLD", 0.35),
         hold_s=0.0,
         label="fire",
     )

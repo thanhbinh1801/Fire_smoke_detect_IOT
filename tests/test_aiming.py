@@ -195,6 +195,23 @@ def test_dry_cycle_never_sprays_or_repeats_motion(rig):
     assert c.phase == "dry_complete"
 
 
+def test_auto_aim_accepts_35_percent_after_three_results(rig, monkeypatch):
+    from confirmation import build_pump_confirmer
+    monkeypatch.setattr(config, "PUMP_CONFIDENCE_THRESHOLD", .35)
+    monkeypatch.setattr(config, "PUMP_CONFIRM_MIN_SAMPLES", 3)
+    c, servo, pump, _ = rig
+    c.confirmer = build_pump_confirmer()
+    detection = [{"label": "fire", "conf": .35, "box": [300, 220, 340, 260]}]
+    tick(rig, detections=detection)
+    assert c.phase == "confirming"
+    tick(rig, detections=detection)
+    assert c.phase == "confirming"
+    tick(rig, detections=detection)
+    assert c.phase == "aiming"
+    assert servo.is_moving()
+    assert pump.get_state()["state"] == "off"
+
+
 def test_auto_uses_post_settle_capture_not_completion_time(rig):
     c, servo, pump, clock = rig
     c.dry_run = False
