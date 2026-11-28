@@ -6,6 +6,7 @@ hỗ trợ cả môi trường Laptop (để test) và Raspberry Pi 4 (thực t�
 """
 
 import os
+import json
 import platform as host_platform
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -245,6 +246,16 @@ SERVO_PWM_BACKEND = _env_str("SERVO_PWM_BACKEND", "auto")
 # Fixed webcam + two-axis nozzle. BCM18 = header pin12; BCM19 = header pin35.
 NOZZLE_PAN_PIN = _env_int("NOZZLE_PAN_PIN", SERVO_PIN)
 NOZZLE_TILT_PIN = _env_int("NOZZLE_TILT_PIN", 19)
+NOZZLE_FLOOR_LENGTH_CM = _env_float("NOZZLE_FLOOR_LENGTH_CM", 43.0)
+NOZZLE_FLOOR_WIDTH_CM = _env_float("NOZZLE_FLOOR_WIDTH_CM", 31.0)
+NOZZLE_MECHANISM = _env_str("NOZZLE_MECHANISM", "yaw_pitch")
+NOZZLE_ROTATION_DEG = _env_float("NOZZLE_ROTATION_DEG", 0.0)
+NOZZLE_PAN_SIGN = _env_int("NOZZLE_PAN_SIGN", 1)
+NOZZLE_TILT_SIGN = _env_int("NOZZLE_TILT_SIGN", 1)
+NOZZLE_IMAGE_ASPECT = _env_float("NOZZLE_IMAGE_ASPECT", 4 / 3)
+NOZZLE_IMAGE_CORNERS = json.loads(_env_str("NOZZLE_IMAGE_CORNERS", "[]"))
+NOZZLE_ANCHOR_Y = _env_float("NOZZLE_ANCHOR_Y", 0.5)
+NOZZLE_WATER_SAMPLES = json.loads(_env_str("NOZZLE_WATER_SAMPLES", "[]"))
 NOZZLE_X_CM = _env_float("NOZZLE_X_CM", 21.5)
 NOZZLE_Y_CM = _env_float("NOZZLE_Y_CM", 15.5)
 NOZZLE_HEIGHT_CM = _env_float("NOZZLE_HEIGHT_CM", 29.0)

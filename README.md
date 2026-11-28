@@ -141,8 +141,20 @@ Chế độ cửa sổ OpenCV cũ vẫn chạy được bằng `python main.py`,
 ## Demo vòi nước hai SG90, camera cố định
 
 Web dashboard hiện điều khiển hai servo của **vòi nước**, không quay webcam.
-Kích thước hiệu chuẩn ban đầu: sàn 43 × 31 cm, đầu vòi cao 29 cm, webcam cao
-36 cm, vị trí XY của cả hai tạm đặt tại tâm sàn (21.5, 15.5). Đo lại khi lắp.
+Cấu hình mô hình hiện tại trong `.env.example`: sàn 28 × 18 cm; vòi (14,−8), cao
+31 cm; camera (14,9), cao 36 cm. Vòi nằm ngoài cạnh AB 8 cm. GPIO18 điều khiển Y,
+GPIO19 điều khiển X; `tilt_xy`, hướng lắp 90°, cả hai chiều −1, góc giữa 90°.
+Chiều cao đo từ mặt sàn mục tiêu, không phải chiều cao trần nhà.
+
+Bản cài mới: cài dependencies, cấu hình overlay GPIO18/GPIO19 theo hướng dẫn,
+`cp .env.example .env`, rồi chạy `./venv/bin/python web_server.py`.
+File mẫu gồm bốn góc ảnh của camera hiện tại. Khi di chuyển camera/sàn, đặt
+`NOZZLE_IMAGE_CORNERS=[]` rồi chọn lại A→B→C→D trên web. Ngắm khô mặc định bật;
+bơm không tự arm khi khởi động.
+
+Thông số sửa trên web áp dụng ngay và lưu trong `data/nozzle_calibration.json`.
+File này và `.env` không nằm trên Git; `.env.example` là bản mẫu trên Git.
+Các lần chỉnh trên web tiếp theo không tự cập nhật file mẫu trên GitHub.
 
 ### Cấu hình phần cứng trước khi chạy
 
@@ -227,17 +239,19 @@ chân đó. Phần mềm vẫn dùng hai đầu ra `gpiozero` độc lập.
 ```dotenv
 NOZZLE_PAN_PIN=18
 NOZZLE_TILT_PIN=19
-NOZZLE_X_CM=21.5
-NOZZLE_Y_CM=15.5
-NOZZLE_HEIGHT_CM=29
+NOZZLE_FLOOR_LENGTH_CM=28
+NOZZLE_FLOOR_WIDTH_CM=18
+NOZZLE_X_CM=14
+NOZZLE_Y_CM=-8
+NOZZLE_HEIGHT_CM=31
 NOZZLE_CAMERA_OFFSET_X_CM=0
-NOZZLE_CAMERA_OFFSET_Y_CM=0
+NOZZLE_CAMERA_OFFSET_Y_CM=17
 NOZZLE_CAMERA_HEIGHT_CM=36
 NOZZLE_TARGET_HEIGHT_CM=0
 NOZZLE_DRY_RUN=true
 ```
 
-Gốc ở một góc sàn: +X dọc cạnh 43 cm, +Y dọc cạnh 31 cm. Đo độ lệch trong mặt phẳng
+Gốc A ở một góc sàn: +X dọc AB=28 cm, +Y dọc AD=18 cm. Đo độ lệch trong mặt phẳng
 sàn từ vị trí đầu vòi tới tâm quang học camera (hình chiếu thẳng đứng của mỗi điểm):
 
 ```text
@@ -245,11 +259,8 @@ camera_x_cm = NOZZLE_X_CM + NOZZLE_CAMERA_OFFSET_X_CM
 camera_y_cm = NOZZLE_Y_CM + NOZZLE_CAMERA_OFFSET_Y_CM
 ```
 
-Ví dụ camera lệch từ vòi **3 cm theo +X và 2 cm theo -Y** thì nhập `3` và `-2`.
-Với vòi tại (21.5,15.5), Camera X/Y trên dashboard ban đầu sẽ là (24.5,13.5).
-Hai số `0` hiện tại chỉ là giá trị tạm vì chưa đo, không phải kết quả hiệu chuẩn.
-Khoảng chênh cao 36−29=7 cm đã được tính riêng bằng hai chiều cao, không cộng vào
-offset X/Y.
+Với vòi (14,−8), camera (14,9), offset X=0 và offset Y=17 cm.
+Khoảng chênh cao 36−31=5 cm tính riêng bằng hai chiều cao, không cộng vào offset X/Y.
 
 **Thứ tự ưu tiên:** nếu chưa có hiệu chuẩn đã lưu, phần mềm lấy các giá trị ban đầu
 từ `.env`/biến môi trường (nếu không có thì dùng mặc định `config.py`). Khi đã lưu

@@ -1,6 +1,6 @@
 """Floor calibration, inverse pointing geometry and non-blocking aim/spray cycle.
 
-Coordinates are cm: x along the 43 cm edge, y along the 31 cm edge, z up.
+Coordinates are cm: x along the floor length, y along its width, z up.
 Image corners are normalized, ordered (0,0), (L,0), (L,W), (0,W).
 """
 
@@ -33,16 +33,20 @@ def number(value):
 class FloorCalibration:
     def __init__(self, values=None):
         self.values = {
-            "length_cm": 43.0, "width_cm": 31.0,
+            "length_cm": config.NOZZLE_FLOOR_LENGTH_CM, "width_cm": config.NOZZLE_FLOOR_WIDTH_CM,
             "nozzle_x_cm": config.NOZZLE_X_CM, "nozzle_y_cm": config.NOZZLE_Y_CM,
             "nozzle_height_cm": config.NOZZLE_HEIGHT_CM,
             "camera_x_cm": config.NOZZLE_X_CM + config.NOZZLE_CAMERA_OFFSET_X_CM,
             "camera_y_cm": config.NOZZLE_Y_CM + config.NOZZLE_CAMERA_OFFSET_Y_CM,
             "camera_height_cm": config.NOZZLE_CAMERA_HEIGHT_CM,
             "target_height_cm": config.NOZZLE_TARGET_HEIGHT_CM,
-            "corners": [], "image_aspect": 4 / 3,
-            "mechanism": "yaw_pitch", "pan_sign": 1, "tilt_sign": 1,
-            "rotation_deg": 0.0, "anchor_y": 0.5, "water_samples": [],
+            "corners": copy.deepcopy(config.NOZZLE_IMAGE_CORNERS),
+            "image_aspect": config.NOZZLE_IMAGE_ASPECT,
+            "mechanism": config.NOZZLE_MECHANISM,
+            "pan_sign": config.NOZZLE_PAN_SIGN, "tilt_sign": config.NOZZLE_TILT_SIGN,
+            "rotation_deg": config.NOZZLE_ROTATION_DEG,
+            "anchor_y": config.NOZZLE_ANCHOR_Y,
+            "water_samples": copy.deepcopy(config.NOZZLE_WATER_SAMPLES),
         }
         if values is not None:
             if not isinstance(values, dict) or set(values) - set(self.values):
