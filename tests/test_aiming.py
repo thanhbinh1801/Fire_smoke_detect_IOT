@@ -99,6 +99,17 @@ def test_yaw_fold_reaches_both_sides():
     assert a[1]-90 == pytest.approx(-(b[1]-90))
 
 
+def test_rotated_mount_gpio18_tracks_y_gpio19_tracks_x():
+    cal = FloorCalibration(calibrated(
+        length_cm=28, width_cm=18, nozzle_x_cm=14, nozzle_y_cm=3,
+        nozzle_height_cm=31, rotation_deg=90, pan_sign=1, tilt_sign=-1))
+    for x, y in [(14, 3), (18, 3), (14, 7), (0, 0), (28, 18)]:
+        pan, tilt = cal.angles(x, y)
+        p, t = math.radians(pan-90), math.radians(tilt-90)
+        assert 3 + 31*math.tan(p) == pytest.approx(y)
+        assert 14 + 31*math.tan(t)/math.cos(p) == pytest.approx(x)
+
+
 def test_water_offsets_are_command_corrections():
     cal = FloorCalibration(calibrated(water_samples=[{"x":21.5,"y":15.5,"dx":2,"dy":0}]))
     pan, tilt = cal.angles(21.5,15.5)
@@ -145,6 +156,32 @@ def test_room_settings_update_saved_geometry_without_replacing_corners(rig, monk
     assert not pump.is_armed()
     assert c.calibration.image_to_floor(.5, .5) == pytest.approx((15, 5.5))
     assert NozzleController(c.path).calibration.ready
+
+
+def test_measurement_changes_apply_to_next_aim_without_restart(rig, monkeypatch):
+    c, servo, pump, _ = rig
+    monkeypatch.setattr(web_server.FireMonitor, "start", lambda self: None)
+    monitor = web_server.FireMonitor()
+    monitor._nozzle, monitor._servo, monitor._pump = c, servo, pump
+    monitor._state["frame_size"] = [640, 480]
+    client = web_server.create_app(monitor).test_client()
+    measurements = dict(length_cm=28, width_cm=18, camera_x_cm=14,
+                        camera_y_cm=9, camera_height_cm=36, nozzle_x_cm=14,
+                        nozzle_y_cm=9, nozzle_height_cm=31, target_height_cm=0)
+    for height in (31, 35):
+        measurements["nozzle_height_cm"] = height
+        response = client.post("/api/nozzle", json={"action": "configure",
+                              "calibration": measurements})
+        assert response.status_code == 200, response.get_json()
+        response = client.post("/api/nozzle", json={"action": "aim", "u": .75, "v": .5})
+        assert response.status_code == 200, response.get_json()
+        expected = 90 + math.degrees(math.atan2(7, height))
+        assert servo.pan.get_angle() == pytest.approx(expected)
+        assert servo.tilt.get_angle() == pytest.approx(90)
+        assert not pump.is_armed()
+        assert pump.get_state()["state"] == "off"
+        assert monitor._nozzle is c
+    assert NozzleController(c.path).calibration.values["nozzle_height_cm"] == 35
 
 
 def test_dry_cycle_never_sprays_or_repeats_motion(rig):

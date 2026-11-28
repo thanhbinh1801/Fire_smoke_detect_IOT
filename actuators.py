@@ -17,19 +17,45 @@ from collections import deque
 
 import config
 
+_PWM_ROOT = "/sys/class/pwm"
+
+
+def _kernel_pwm_chip(pin):
+    """Find the pwm-gpio chip actually wired to this BCM pin in Device Tree.
+
+    Chip numbers are allocated by the kernel, not by GPIO number. Each
+    pwm-gpio overlay has its own channel 0; never guess from pwmchip0.
+    """
+    if not os.path.isdir(_PWM_ROOT):
+        return None
+    matches = []
+    for name in os.listdir(_PWM_ROOT):
+        if not name.startswith("pwmchip"):
+            continue
+        chip = os.path.join(_PWM_ROOT, name)
+        driver = os.path.realpath(os.path.join(chip, "device", "driver"))
+        if os.path.basename(driver) != "pwm-gpio":
+            continue
+        with open(os.path.join(chip, "device", "of_node", "gpios"), "rb") as f:
+            cells = f.read()
+        # Pi GPIO specifier: controller phandle, BCM number, active flags.
+        if len(cells) != 12:
+            raise RuntimeError(f"Không đọc được ánh xạ GPIO của {chip}")
+        if int.from_bytes(cells[4:8], "big") == pin:
+            if int.from_bytes(cells[8:12], "big") != 0:
+                raise RuntimeError(f"PWM GPIO{pin} phải dùng active-high")
+            matches.append(chip)
+    if len(matches) > 1:
+        raise RuntimeError(f"Nhiều PWM chip cùng ánh xạ GPIO{pin}")
+    return matches[0] if matches else None
+
 
 class _SysfsPWMServo:
     def __init__(self, pin, min_pulse_width=0.0005, max_pulse_width=0.0024, frame_width=0.02):
         self.pin = int(pin)
-        chips = sorted(
-            (f"/sys/class/pwm/{name}" for name in os.listdir("/sys/class/pwm") if name.startswith("pwmchip")),
-            key=lambda path: int(path.rsplit("pwmchip", 1)[1]),
-        )
-        if not chips:
-            raise RuntimeError("Kernel PWM chưa được bật; không tìm thấy pwmchip")
-        self.chip_path = chips[0]
-        if os.path.realpath(os.path.join(self.chip_path, "device", "driver")).endswith("/pwm-gpio") and self.pin != 18:
-            raise RuntimeError("pwm-gpio hiện được cấu hình cho GPIO18")
+        self.chip_path = _kernel_pwm_chip(self.pin)
+        if self.chip_path is None:
+            raise RuntimeError(f"Chưa có kernel PWM cho GPIO{self.pin}; chạy sudo dtoverlay pwm-gpio gpio={self.pin}")
         self.channel = 0
         self.pwm_path = f"{self.chip_path}/pwm{self.channel}"
         self.min_pw = float(min_pulse_width)
@@ -45,8 +71,29 @@ class _SysfsPWMServo:
                     break
                 time.sleep(0.01)
 
+        # Export creates sysfs files before udev grants the gpio group access.
+        # Wait for writable handles without changing PWM state or permissions.
+        deadline = time.monotonic() + 2.0
+        for name in ("enable", "duty_cycle", "polarity", "period"):
+            while True:
+                try:
+                    with open(f"{self.pwm_path}/{name}", "r+", encoding="utf-8"):
+                        pass
+                    break
+                except (FileNotFoundError, PermissionError):
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.01)
+
+        with open(f"{self.pwm_path}/enable", encoding="utf-8") as f:
+            if f.read().strip() == "1":
+                raise RuntimeError(f"PWM GPIO{self.pin} đang được sử dụng; dừng chương trình khác trước")
         with open(f"{self.pwm_path}/enable", "w", encoding="utf-8") as f:
             f.write("0")
+        with open(f"{self.pwm_path}/duty_cycle", "w", encoding="utf-8") as f:
+            f.write("0")
+        with open(f"{self.pwm_path}/polarity", "w", encoding="utf-8") as f:
+            f.write("normal")
         with open(f"{self.pwm_path}/period", "w", encoding="utf-8") as f:
             f.write(str(self.period_ns))
 
@@ -142,16 +189,22 @@ class CameraServo:
         self._servo = None
         self._detach_timer = None
         self._moving_until = 0.0
+        self.pwm_backend = "simulation"
 
         if self.platform == "pi":
             min_pw = float(getattr(config, "SERVO_MIN_PULSE_WIDTH", 0.0005))
             max_pw = float(getattr(config, "SERVO_MAX_PULSE_WIDTH", 0.0024))
-            if kernel_pwm and os.path.isdir("/sys/class/pwm/pwmchip0") and self.pin in (
-                12,
-                13,
-                18,
-                19,
-            ):
+            backend = str(getattr(config, "SERVO_PWM_BACKEND", "auto")).lower()
+            if backend not in ("auto", "kernel", "lgpio"):
+                raise ValueError("SERVO_PWM_BACKEND phải là auto, kernel hoặc lgpio")
+            if not kernel_pwm:
+                backend = "lgpio"
+            chip = _kernel_pwm_chip(self.pin)
+            if backend == "kernel" and chip is None:
+                raise RuntimeError(f"Chưa có kernel PWM cho GPIO{self.pin}; chạy sudo dtoverlay pwm-gpio gpio={self.pin}")
+            if backend == "lgpio" and chip is not None:
+                raise RuntimeError(f"GPIO{self.pin} đang thuộc kernel PWM; chọn SERVO_PWM_BACKEND=kernel hoặc gỡ overlay")
+            if chip is not None and backend != "lgpio":
                 try:
                     self._servo = _SysfsPWMServo(
                         self.pin,
@@ -159,9 +212,17 @@ class CameraServo:
                         max_pulse_width=max_pw,
                     )
                     self._servo.angle = self._angle
-                    pwm_mode = "hardware/kernel PWM"
-                except Exception:
+                    self.pwm_backend = "kernel"
+                    pwm_mode = f"kernel PWM: {self._servo.pwm_path}"
+                except Exception as error:
+                    if self._servo is not None:
+                        self._servo.close()
                     self._servo = None
+                    raise RuntimeError(
+                        f"Không khởi tạo được kernel PWM GPIO{self.pin}: {error}. "
+                        "Kiểm tra quyền PWM sysfs; có thể chạy sudo ./venv/bin/python web_server.py. "
+                        "Không fallback lgpio khi overlay đang giữ GPIO."
+                    ) from error
             if self._servo is None:
                 from gpiozero import AngularServo  # type: ignore[import-not-found]
 
@@ -176,6 +237,7 @@ class CameraServo:
                 _patch_lgpio_pwm_pin(self._servo)
                 self._servo.angle = self._angle
                 pwm_mode = "lgpio PWM"
+                self.pwm_backend = "lgpio"
             with self._lock:
                 self._schedule_detach_locked()
             print(
@@ -255,6 +317,7 @@ class CameraServo:
             "center_angle": self.center_angle,
             "moving": self.is_moving(),
             "available": self.platform == "pi",
+            "pwm_backend": self.pwm_backend,
         }
 
     def cleanup(self):
@@ -294,7 +357,7 @@ class NozzleServo:
                     max_angle=getattr(config, prefix + "_MAX"),
                     center_angle=getattr(config, prefix + "_ZERO"),
                     hold_position=config.NOZZLE_HOLD_POSITION,
-                    kernel_pwm=False,
+                    kernel_pwm=True,
                 ))
             # Initial PWM also moves the mechanism towards its configured zero.
             for axis in (self.pan, self.tilt):

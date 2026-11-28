@@ -100,6 +100,13 @@ class FireMonitor:
         camera = detector = alert = servo = pump = None
         async_detector = None
         logger.info(
+            "Cấu hình .env: %s (%s); servo backend=%s, giữ PWM=%s",
+            config.ENV_FILE_PATH,
+            "đã đọc" if config.ENV_FILE_LOADED else "không có/không đọc được",
+            config.SERVO_PWM_BACKEND,
+            config.NOZZLE_HOLD_POSITION,
+        )
+        logger.info(
             "Chế độ actuator: %s",
             "GPIO thật trên Raspberry Pi" if config.PLATFORM == "pi" else "mô phỏng trên laptop",
         )
@@ -590,7 +597,8 @@ class FireMonitor:
                 elif action == "right":
                     angle = servo.step(+1)
                 elif action in ("up", "down") and isinstance(servo, NozzleServo):
-                    angle = servo.step(-1 if action == "up" else 1, axis="tilt")
+                    result = servo.step(-1 if action == "up" else 1, axis="tilt")
+                    angle = servo.tilt.get_angle() if result is not None else None
                 elif action == "center":
                     angle = servo.center()
                 elif action == "set":

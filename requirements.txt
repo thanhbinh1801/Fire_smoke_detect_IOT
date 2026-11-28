@@ -5,6 +5,7 @@ onnxruntime>=1.15.0
 numpy>=1.23.0
 Pillow>=10.0.0
 Flask>=3.0.0
+python-dotenv>=1.0.0
 opencv-python>=4.8.0; platform_system == "Windows"
 
 # --- LƯU Ý PHẦN CỨNG TRÊN RASPBERRY PI OS ---

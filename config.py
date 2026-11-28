@@ -60,7 +60,7 @@ def load_env_file(dotenv_path: str = ENV_FILE_PATH, override: bool = False) -> b
         return False
 
 
-load_env_file()
+ENV_FILE_LOADED = load_env_file()
 
 
 def _env_str(key: str, default: str = "") -> str:
@@ -240,6 +240,7 @@ SERVO_MIN_PULSE_WIDTH = _env_float("SERVO_MIN_PULSE_WIDTH", 0.0005)
 SERVO_MAX_PULSE_WIDTH = _env_float("SERVO_MAX_PULSE_WIDTH", 0.0024)
 SERVO_SETTLE_SECONDS = _env_float("SERVO_SETTLE_SECONDS", 0.8)
 SERVO_HOLD_POSITION = _env_bool("SERVO_HOLD_POSITION", True)
+SERVO_PWM_BACKEND = _env_str("SERVO_PWM_BACKEND", "auto")
 
 # Fixed webcam + two-axis nozzle. BCM18 = header pin12; BCM19 = header pin35.
 NOZZLE_PAN_PIN = _env_int("NOZZLE_PAN_PIN", SERVO_PIN)

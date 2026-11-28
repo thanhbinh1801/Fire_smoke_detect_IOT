@@ -403,6 +403,7 @@
             <p class="status-note" id="nozzle-help">Chọn góc sàn theo thứ tự: gốc (0,0) → đầu cạnh X → góc đối diện → đầu cạnh Y. Kích thước lấy từ số đo trong phần hiệu chuẩn. Lệnh ngắm tay sẽ disarm.</p>
             <details style="margin-top:12px">
               <summary>Hiệu chuẩn phòng và cơ cấu</summary>
+              <p class="status-note">X theo cạnh dài, Y theo cạnh rộng; tọa độ camera và vòi là hình chiếu xuống sàn, tính từ cùng góc (0,0). Sàn 28 × 18 cm có tâm (14,9) cm. Khoảng cách camera–vòi 6 cm cần tách theo hướng X/Y, không phải chiều cao.</p>
               <div id="nozzle-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px"></div>
               <label style="display:block;margin-top:10px">Kiểu cơ cấu
                 <select id="nozzle-mechanism" style="width:100%">
@@ -416,7 +417,7 @@
               </label>
               <p class="status-note">Mỗi mẫu: {"x":10,"y":10,"dx":1,"dy":-2}. dx/dy là độ lệch điểm cần ngắm để nước tới đúng (x,y), xác định bằng thử thực tế.</p>
               <button class="btn full" id="nozzle-settings-save">Lưu thông số và áp dụng</button>
-              <p class="status-note">Thông số được lưu cho lần chạy sau. Click ngắm cần chọn đủ bốn góc rồi lưu hiệu chuẩn bên dưới. Cả hai nút lưu đều dừng bơm và disarm.</p>
+              <p class="status-note">Bấm lưu để áp dụng ngay cho lần ngắm tiếp theo, không cần khởi động lại; thông số cũng được giữ cho lần chạy sau. Click ngắm cần chọn đủ bốn góc rồi lưu hiệu chuẩn bên dưới. Cả hai nút lưu đều dừng bơm và disarm.</p>
               <button class="btn full" id="nozzle-save">Lưu 4 góc và hiệu chuẩn</button>
             </details>
 
@@ -462,7 +463,7 @@
 
       setText(
         $("servo-angle"),
-        servo.angle == null ? "--°" : `${Math.round(Number(servo.angle))}°`
+        `Ngang: ${servo.pan?.angle == null ? "--" : Math.round(Number(servo.pan.angle))}° · Dọc: ${servo.tilt?.angle == null ? "--" : Math.round(Number(servo.tilt.angle))}°`
       );
 
       const armBtn = $("auto-arm");

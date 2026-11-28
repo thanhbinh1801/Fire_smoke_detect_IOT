@@ -157,12 +157,43 @@ Kích thước hiệu chuẩn ban đầu: sàn 43 × 31 cm, đầu vòi cao 29 c
   ZERO của tilt là vòi thẳng xuống; ZERO của pan là hướng +X của cơ cấu.
   Mặc định giới hạn 30–150°; **không đảm bảo phủ toàn sàn với mọi cách lắp**.
   Chỉ mở rộng giới hạn sau khi đã thử cơ khí với ống nước gắn đầy đủ.
-- Hai servo dùng hai đầu ra `gpiozero` độc lập, giữ bản vá duty cycle `lgpio`.
-  Không dùng lại backend sysfs channel 0 cho cả hai chân. Nếu Pi đang bật overlay
-  PWM chiếm các chân này, cần giải phóng chân/đổi cấu hình trước khi chạy.
+- `SERVO_PWM_BACKEND=auto` dùng kernel PWM nếu có overlay `pwm-gpio` ánh xạ đúng GPIO;
+  chân chưa có overlay dùng `gpiozero`/`lgpio` với bản vá duty cycle. Đặt `kernel`
+  để yêu cầu cả hai trục dùng kernel PWM, hoặc `lgpio` nếu không dùng overlay.
+  Mỗi overlay `pwm-gpio` có một chip/kênh 0 riêng; code đọc Device Tree để phân biệt
+  chip của GPIO18 và GPIO19, không dùng chung kênh của một chip cho hai servo.
+  Lỗi quyền sysfs được báo trực tiếp, không fallback sang GPIO đang bị overlay giữ.
 - `NOZZLE_HOLD_POSITION=false` mặc định detach sau thời gian ổn định như cơ chế cũ.
   Nếu tải vòi/ống làm trôi góc, kiểm tra nguồn/cơ khí và có thể đặt `true` để giữ PWM;
   kiểm tra lại độ rung và độ ổn định khi phun.
+
+### Chạy web với kernel PWM trên Pi 4
+
+Dừng các chương trình đang điều khiển GPIO. Trong `.env`, đặt
+`SERVO_PWM_BACKEND=kernel`. Nếu muốn giữ xung liên tục như bản một servo cũ,
+đặt thêm `NOZZLE_HOLD_POSITION=true`; mặc định `false` vẫn detach sau thời gian ổn định.
+Nạp mỗi overlay đúng một lần (kiểm tra trước bằng `dtoverlay -l`):
+
+```bash
+sudo dtoverlay pwm-gpio gpio=18
+sudo dtoverlay pwm-gpio gpio=19
+sudo ./venv/bin/python web_server.py
+```
+
+Log mỗi servo phải ghi `kernel PWM` với **hai PWM chip khác nhau**. Dashboard/API
+status có `servo.pan.pwm_backend` và `servo.tilt.pwm_backend` để kiểm tra backend.
+Chạy bằng Python của venv với quyền root nếu user chưa có quyền ghi PWM sysfs.
+Code web không tự nạp overlay hoặc tự nâng quyền. Overlay nạp bằng lệnh trên mất
+sau reboot. Để giữ cấu hình, thêm dưới mục `[all]` trong `/boot/firmware/config.txt`:
+
+```ini
+dtoverlay=pwm-gpio,gpio=18
+dtoverlay=pwm-gpio,gpio=19
+```
+
+Hai dòng này thay cho cấu hình `pwm-gpio` trùng chân nếu đã có; không thêm lặp.
+`pwm-gpio` phát PWM bằng phần mềm trong kernel, không phải PWM phần cứng.
+Backend khởi tạo thành công chưa xác nhận chuyển động cơ khí của servo.
 
 ### Cách lắp dây trên Raspberry Pi 4 (header 40 chân)
 
