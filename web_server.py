@@ -116,7 +116,6 @@ class FireMonitor:
             from confirmation import (
                 AsyncSnapshotSaver,
                 build_alarm_confirmer,
-                build_smoke_confirmer,
             )
             from detector import AsyncFireDetector, FireSmokeDetector
 
@@ -127,13 +126,11 @@ class FireMonitor:
             servo = NozzleServo()
             pump = WaterPump()
             alarm_confirmer = build_alarm_confirmer()
-            smoke_confirmer = build_smoke_confirmer()
             snapshot_saver = AsyncSnapshotSaver()
             with self._lock:
                 self._camera = camera
                 self._detector = detector
                 self._alarm_confirmer = alarm_confirmer
-                self._smoke_confirmer = smoke_confirmer
                 self._servo = servo
                 self._pump = pump
                 self._last_control_at = time.monotonic()
@@ -151,7 +148,6 @@ class FireMonitor:
             last_camera_frame_time = 0.0
             last_fire_time = 0.0
             confirmed_fire = False
-            smoke_votes = 0
             cached_detections = []
             stream_interval = 1.0 / max(1, int(getattr(config, "WEB_STREAM_FPS", 12)))
             next_stream_at = 0.0
@@ -160,9 +156,7 @@ class FireMonitor:
             jpeg_quality = max(
                 30, min(95, int(getattr(config, "WEB_JPEG_QUALITY", 80)))
             )
-            required_smoke_votes = max(
-                1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2))
-            )
+
 
             while not self._stop_event.is_set():
                 loop_started = time.monotonic()
@@ -193,10 +187,7 @@ class FireMonitor:
                     detection for detection in detections
                     if detection.get("label") == "fire"
                 ]
-                smoke_detections = [
-                    detection for detection in detections
-                    if detection.get("label") == "smoke"
-                ]
+
 
                 has_new_result = bool(result_time and result_time != last_result_time)
                 if has_new_result:
@@ -212,9 +203,6 @@ class FireMonitor:
                     confirmed_fire = alarm_confirmer.update(
                         detections, now=now, result_time=result_time
                     )
-                    confirmed_smoke = smoke_confirmer.update(
-                        detections, now=now, result_time=result_time
-                    )
                     if has_new_result:
                         if confirmed_fire and fire_detections:
                             self._record_history_event("fire", fire_detections, now)
@@ -226,22 +214,6 @@ class FireMonitor:
                                 ai_fps=ai_fps,
                             )
                             snapshot_saver.save_if_due(frame, now=now)
-                        if smoke_detections:
-                            smoke_votes += 1
-                            if (
-                                smoke_votes >= required_smoke_votes or confirmed_smoke
-                            ) and not confirmed_fire:
-                                self._record_history_event("smoke", smoke_detections, now)
-                                self._notifier.notify(
-                                    "smoke",
-                                    frame,
-                                    detections,
-                                    fps=camera_fps,
-                                    ai_fps=ai_fps,
-                                )
-                        else:
-                            smoke_votes = 0
-
                     if not confirmed_fire and not detections:
                         cached_detections = []
 

@@ -114,3 +114,38 @@ def test_env_loaded_in_config():
     assert hasattr(config, "SMOKE_CONFIDENCE_THRESHOLD")
     assert hasattr(config, "TELEGRAM_BOT_TOKEN")
     assert hasattr(config, "PREPROCESS_ENABLE_CLAHE")
+
+
+def test_smoke_is_discarded_in_primary_and_roi_postprocessing():
+    detector = FireSmokeDetector()
+    _, meta = detector.preprocess(np.zeros((320, 320, 3), dtype=np.uint8))
+    for smoke_id, fire_id in ((1, 0), (0, 1)):
+        detector.names = {smoke_id: "smoke", fire_id: "fire"}
+        preds = np.zeros((1, 6, 2100), dtype=np.float32)
+        preds[0, :4, 0] = [160, 160, 40, 40]
+        # Even a high secondary fire score must not relabel a smoke prediction.
+        preds[0, 4 + smoke_id, 0] = .99
+        preds[0, 4 + fire_id, 0] = .80
+        assert detector.postprocess([preds], meta) == []
+        assert detector.postprocess([preds], meta, conf_threshold=.22) == []
+        preds[0, :4, 1] = [80, 80, 30, 30]
+        preds[0, 4 + fire_id, 1] = .80
+        result = detector.postprocess([preds], meta)
+        assert len(result) == 1 and result[0]["label"] == "fire"
+
+
+def test_smoke_does_not_trigger_roi_reinference():
+    detector = FireSmokeDetector()
+    detector.roi_zoom_enabled = True
+    calls = []
+
+    def smoke_only(blob):
+        calls.append(blob)
+        preds = np.zeros((1, 6, 2100), dtype=np.float32)
+        preds[0, :4, 0] = [160, 160, 12, 12]
+        preds[0, 5, 0] = .99
+        return [preds]
+
+    detector.infer = smoke_only
+    assert detector.detect(np.zeros((480, 640, 3), dtype=np.uint8)) == []
+    assert len(calls) == 1

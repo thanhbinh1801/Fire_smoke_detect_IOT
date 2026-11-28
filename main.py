@@ -24,7 +24,6 @@ from camera import FireCamera
 from confirmation import (
     AsyncSnapshotSaver,
     build_alarm_confirmer,
-    build_smoke_confirmer,
 )
 from detector import FireSmokeDetector, AsyncFireDetector
 from alert import AlertSystem
@@ -51,15 +50,12 @@ def main():
     last_fire_time = 0.0
     last_result_time = 0.0
     last_camera_frame_time = 0.0
-    smoke_votes = 0
     cached_detections = []
     is_fire_confirmed = False
     alarm_confirmer = build_alarm_confirmer()
-    smoke_confirmer = build_smoke_confirmer()
     snapshot_saver = AsyncSnapshotSaver()
     display_interval = 1.0 / max(1, int(getattr(config, "DISPLAY_FPS", 15)))
     next_display_at = 0.0
-    required_smoke_votes = max(1, int(getattr(config, "SMOKE_CONFIRMATION_FRAMES", 2)))
     stale_timeout = float(getattr(config, "CAMERA_STALE_TIMEOUT", 2.0))
     hold_fire_time = max(0.0, float(getattr(config, "HOLD_FIRE_TIME", 1.5)))
 
@@ -99,15 +95,10 @@ def main():
 
             has_new_result = bool(result_time and result_time != last_result_time)
             has_fire_now = False
-            has_smoke_now = False
             if has_new_result:
                 last_result_time = result_time
                 has_fire_now = any(
                     detection.get("label") == "fire"
-                    for detection in current_detections
-                )
-                has_smoke_now = any(
-                    detection.get("label") == "smoke"
                     for detection in current_detections
                 )
                 if has_fire_now:
@@ -117,10 +108,6 @@ def main():
             is_fire_confirmed = alarm_confirmer.update(
                 current_detections, now=now, result_time=result_time
             )
-            is_smoke_confirmed = smoke_confirmer.update(
-                current_detections, now=now, result_time=result_time
-            )
-
             alert.set_fire_led(is_fire_confirmed)
             alert.set_buzzer(is_fire_confirmed)
 
@@ -130,17 +117,6 @@ def main():
                         "fire", frame, current_detections, fps=cam_fps, ai_fps=ai_fps
                     )
                     snapshot_saver.save_if_due(frame, now=now)
-
-                if has_smoke_now:
-                    smoke_votes += 1
-                    if (
-                        smoke_votes >= required_smoke_votes or is_smoke_confirmed
-                    ) and not is_fire_confirmed:
-                        notifier.notify(
-                            "smoke", frame, current_detections, fps=cam_fps, ai_fps=ai_fps
-                        )
-                else:
-                    smoke_votes = 0
 
             if not is_fire_confirmed and not current_detections:
                 cached_detections = []

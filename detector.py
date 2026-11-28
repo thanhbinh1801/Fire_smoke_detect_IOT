@@ -191,7 +191,9 @@ class FireSmokeDetector:
             normalized_label = str(label).strip().lower()
             is_fire = "fire" in normalized_label or "flame" in normalized_label
             is_smoke = "smoke" in normalized_label
-            if not is_fire and not is_smoke:
+            # Keep model class indices intact, but discard smoke at the source.
+            # This also excludes smoke from ROI zoom, overlays and notifications.
+            if is_smoke or not is_fire:
                 continue
 
             cls_threshold = self._get_class_threshold(
@@ -233,7 +235,7 @@ class FireSmokeDetector:
 
                 detections.append(
                     {
-                        "label": "fire" if is_fire else "smoke",
+                        "label": "fire",
                         "conf": float(conf),
                         "box": (int(xmin), int(ymin), int(xmax), int(ymax)),
                     }

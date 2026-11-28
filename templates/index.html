@@ -443,7 +443,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const statusLabels = {
-      running: ["An toàn", "Không phát hiện lửa hoặc khói."],
+      running: ["An toàn", "Không phát hiện lửa."],
       starting: ["Đang khởi động", "Đang kết nối camera và nạp model AI."],
       error: ["Lỗi hệ thống", "Kiểm tra kết nối camera hoặc model ONNX."],
       stopped: ["Đã dừng", "Hệ thống đang tạm dừng."]
@@ -492,7 +492,6 @@
       setText($("ai-fps"), Number(data.ai_fps || 0).toFixed(1));
 
       const detections = Array.isArray(data.detections) ? data.detections : [];
-      const hasSmoke = detections.some((d) => d.label === "smoke");
       const banner = $("state-banner");
       banner.className = "state-banner";
 
@@ -504,10 +503,6 @@
         banner.classList.add("error");
         setText($("state"), statusLabels.error[0]);
         setText($("state-copy"), statusLabels.error[1]);
-      } else if (data.status === "running" && hasSmoke) {
-        banner.classList.add("smoke");
-        setText($("state"), "Cảnh báo sớm: Phát hiện khói");
-        setText($("state-copy"), "Đang theo dõi khói trong khu vực.");
       } else {
         const copy = statusLabels[data.status] || [data.status || "Không xác định", ""];
         setText($("state"), copy[0]);
